@@ -72,6 +72,11 @@ export class Input {
     e.preventDefault()
   }
 
+  // Dragging with the right button must not open the browser's own menu.
+  private readonly onContextMenu = (e: Event) => {
+    e.preventDefault()
+  }
+
   private readonly onPointerDown = (e: PointerEvent) => {
     this.pointerDown = true
     this.pointerX = e.clientX
@@ -112,6 +117,7 @@ export class Input {
     target.addEventListener('pointerdown', this.onPointerDown)
     target.addEventListener('pointerup', this.onPointerUp)
     target.addEventListener('pointermove', this.onPointerMove)
+    target.addEventListener('contextmenu', this.onContextMenu)
   }
 
   detach(target: Window = window) {
@@ -122,6 +128,7 @@ export class Input {
     target.removeEventListener('pointerdown', this.onPointerDown)
     target.removeEventListener('pointerup', this.onPointerUp)
     target.removeEventListener('pointermove', this.onPointerMove)
+    target.removeEventListener('contextmenu', this.onContextMenu)
   }
 
   isDown(code: string): boolean {
