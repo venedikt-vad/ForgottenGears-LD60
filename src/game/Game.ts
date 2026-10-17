@@ -1,5 +1,10 @@
 import { Input } from './Input'
 import { FONT_FAMILY, loadFont } from './fonts'
+import { ConsoleWindow } from './ConsoleWindow'
+import { LanguageSelectWindow } from './LanguageSelectWindow'
+import { UiWindow } from './UiWindow'
+import { WindowManager } from './WindowManager'
+import type { GameLanguage } from './GameWindow'
 
 export type GameOptions = {
   canvas: HTMLCanvasElement
@@ -12,6 +17,7 @@ export class Game {
   readonly glowCanvas: HTMLCanvasElement
   readonly glowCtx: CanvasRenderingContext2D
   readonly input: Input
+  readonly windows: WindowManager
 
   private width = 0
   private height = 0
@@ -19,6 +25,7 @@ export class Game {
   private lastTime = 0
   private fontLoaded = false
 
+  // Existing player/gameplay state is retained.
   private player = { x: 200, y: 200, size: 32, speed: 240 }
 
   private readonly onResize = () => this.resize()
@@ -35,6 +42,23 @@ export class Game {
     this.glowCtx = glowCtx
 
     this.input = new Input()
+    this.windows = new WindowManager(this.input)
+
+    const consoleWindow = new ConsoleWindow()
+    const uiWindow = new UiWindow()
+    const languageWindow = new LanguageSelectWindow((language: GameLanguage) => {
+      consoleWindow.setLanguage(language)
+      uiWindow.setLanguage(language)
+      this.windows.show('console')
+    })
+
+    this.windows
+      .register(languageWindow)
+      .register(consoleWindow)
+      .register(uiWindow)
+
+    // First screen shown when the game starts.
+    this.windows.show('language')
   }
 
   start() {
@@ -78,6 +102,7 @@ export class Game {
   }
 
   private update(dt: number) {
+    // Original movement code is kept unchanged.
     const p = this.player
     let dx = 0
     let dy = 0
@@ -99,6 +124,8 @@ export class Game {
     const half = p.size / 2
     p.x = Math.max(half, Math.min(this.width - half, p.x))
     p.y = Math.max(half, Math.min(this.height - half, p.y))
+
+    this.windows.update(dt)
   }
 
   private render() {
@@ -127,6 +154,9 @@ export class Game {
       ctx.textBaseline = 'top'
       ctx.fillText('Loading font...', this.width / 2, 16)
     }
+
+    // Draw the active window on top of the existing game scene.
+    this.windows.render(ctx, this.width, this.height)
   }
 
   private mirrorToGlow() {
