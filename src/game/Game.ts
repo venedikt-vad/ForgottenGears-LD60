@@ -1,8 +1,9 @@
 import { Input } from './Input'
 import { CursorDrawer } from './CursorDrawer'
-import { FONT_FAMILY, loadFont } from './fonts'
+import { FONT_FAMILY, LOST_LANGUAGE_FAMILY, loadFont } from './fonts'
 import { ConsoleWindow } from './windows/ConsoleWindow'
 import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
+import { MemoryCoreWindow } from './windows/MemoryCoreWindow'
 import { UiWindow } from './windows/UiWindow'
 import { WindowManager } from './windows/WindowManager'
 import type { GameLanguage } from './windows/GameWindow'
@@ -56,24 +57,26 @@ export class Game {
       this.windows.show('console')
     })
     const reactor = new ReactorCoreWindow()
+    const memoryCore = new MemoryCoreWindow()
 
     this.windows
       .register(languageWindow)
       .register(consoleWindow)
       .register(uiWindow)
       .register(reactor)
+      .register(memoryCore)
 
     // First screen shown when the game starts.
     // this.windows.show('language')
 
-    this.windows.show('reactor')
+    this.windows.show('memoryCore')
   }
 
   start() {
     if (this.running) return
     this.running = true
 
-    loadFont(FONT_FAMILY)
+    Promise.all([loadFont(FONT_FAMILY), loadFont(LOST_LANGUAGE_FAMILY)])
       .then(() => {
         this.fontLoaded = true
       })

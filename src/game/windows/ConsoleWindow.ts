@@ -305,6 +305,7 @@ export class ConsoleWindow implements GameWindow {
               'ДОСТУПНЫЕ КОМАНДЫ:',
               '  help    — список команд',
               '  ui      — открыть панель обслуживания робота',
+              '  memory  — открыть ядро памяти',
               '  status  — состояние подсистем',
               '  manual  — показать мануал',
               '  clear   — очистить текущий экран (история сохранится)',
@@ -315,6 +316,7 @@ export class ConsoleWindow implements GameWindow {
               'AVAILABLE COMMANDS:',
               '  help    — list commands',
               '  ui      — open robot service toolbar',
+              '  memory  — open memory core',
               '  status  — subsystem status',
               '  manual  — print the manual',
               '  clear   — clear current view (history is retained)',
@@ -326,6 +328,11 @@ export class ConsoleWindow implements GameWindow {
       case 'ui':
         this.appendTranscript(this.language === 'ru' ? 'ЗАПУСК ПАНЕЛИ ОБСЛУЖИВАНИЯ...\n' : 'STARTING SERVICE TOOLBAR...\n')
         this.manager?.show('ui')
+        break
+
+      case 'memory':
+        this.appendTranscript(this.language === 'ru' ? 'ЗАПУСК ЯДРА ПАМЯТИ...\n' : 'STARTING MEMORY CORE...\n')
+        this.manager?.show('memoryCore')
         break
 
       case 'status':
