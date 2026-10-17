@@ -32,12 +32,15 @@ const CELL_TARGET = 48
 const PUZZLE_MIN = 7
 const PUZZLE_MAX = 12
 
-// Appear animation timings (seconds).
+// Appear animation timings (seconds). Row headers reveal first, then the rest.
 const APPEAR_GRID = 0.5
-const APPEAR_BLINK = 0.0
-const APPEAR_SYMBOL = 1.4
+const APPEAR_BLINK = 0.9
+const APPEAR_HEADER = 0.5
+const APPEAR_SYMBOL = 1
 const APPEAR_REVEAL = 0.18
-const APPEAR_TOTAL = APPEAR_GRID + Math.max(APPEAR_BLINK, APPEAR_SYMBOL)
+const APPEAR_HEADER_START = APPEAR_GRID
+const APPEAR_SYMBOL_START = APPEAR_HEADER_START + APPEAR_HEADER
+const APPEAR_TOTAL = APPEAR_SYMBOL_START + APPEAR_SYMBOL
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -63,8 +66,8 @@ function hash01(seed: number): number {
 }
 
 /** 0..1 reveal progress for a symbol whose staggered delay has just elapsed. */
-function reveal(time: number, delay: number): number {
-  const p = (time - APPEAR_GRID - delay) / APPEAR_REVEAL
+function reveal(time: number, delay: number, start: number): number {
+  const p = (time - start - delay) / APPEAR_REVEAL
   return p <= 0 ? 0 : p >= 1 ? 1 : p
 }
 
@@ -414,7 +417,7 @@ export class MemoryCoreWindow implements GameWindow {
     ctx.textBaseline = 'middle'
 
     for (let index = 0; index < this.leftSymbols.length; index += 1) {
-      const shown = reveal(appear.time, hash01(index * 1.13) * APPEAR_SYMBOL)
+      const shown = reveal(appear.time, hash01(index * 1.13) * APPEAR_SYMBOL, APPEAR_SYMBOL_START)
       if (shown <= 0) continue
 
       const column = index % grid.columns
@@ -552,7 +555,7 @@ export class MemoryCoreWindow implements GameWindow {
     ctx.textBaseline = 'middle'
 
     for (let row = 0; row < grid.rows; row += 1) {
-      const shown = reveal(appear.time, hash01(row * 1.13 + 2000) * APPEAR_SYMBOL)
+      const shown = reveal(appear.time, hash01(row * 1.13 + 2000) * APPEAR_HEADER, APPEAR_HEADER_START)
       if (shown <= 0) continue
 
       const lit = row === this.focusRow
@@ -576,7 +579,7 @@ export class MemoryCoreWindow implements GameWindow {
     for (let row = 0; row < grid.rows; row += 1) {
       for (let column = 0; column < grid.columns; column += 1) {
         const index = row * grid.columns + column
-        const shown = reveal(appear.time, hash01(index * 1.13 + 1000) * APPEAR_SYMBOL)
+        const shown = reveal(appear.time, hash01(index * 1.13 + 1000) * APPEAR_SYMBOL, APPEAR_SYMBOL_START)
         if (shown <= 0) continue
 
         const isPuzzle = this.puzzleCells.has(index)
