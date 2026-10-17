@@ -100,6 +100,11 @@ export class UiWindow implements GameWindow {
   private lastFooterRect: Rect | null = null
   private visibleComponents: RuntimeComponent[] = []
 
+  // Rolling history samples for continuous line graphs (up to 40 samples each)
+  private readonly stabilityHistory: number[] = []
+  private readonly powerHistory: number[] = []
+  private historyTimer = 0
+
   constructor(robotSystem: RobotSystem) {
     this.robotSystem = robotSystem
     this.schemeImage.src = `${import.meta.env.BASE_URL}robot_scheme/scheme_01.png`
@@ -122,7 +127,29 @@ export class UiWindow implements GameWindow {
     })
   }
 
-  update(_dt: number, input: Input): void {
+  update(dt: number, input: Input): void {
+    // Accumulate history data points over time
+    this.historyTimer += dt
+    if (this.historyTimer >= 0.15) {
+      this.historyTimer = 0
+
+      const reactorWin = this.manager?.get('reactor') as unknown as { solved?: boolean; computeStability?: () => number } | undefined
+      const stability = typeof reactorWin?.computeStability === 'function'
+        ? reactorWin.computeStability()
+        : (this.robotSystem.reactorRestored ? 1 : 0.3)
+
+      const powerWin = this.manager?.get('powerDistribution') as unknown as { powerConsumption?: number } | undefined
+      const powerConsumption = typeof powerWin?.powerConsumption === 'number'
+        ? powerWin.powerConsumption
+        : (this.robotSystem.powerGridPuzzleSolved ? 0.9 : 0.3)
+
+      this.stabilityHistory.push(stability)
+      if (this.stabilityHistory.length > 40) this.stabilityHistory.shift()
+
+      this.powerHistory.push(powerConsumption)
+      if (this.powerHistory.length > 40) this.powerHistory.shift()
+    }
+
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
       this.manager?.show('console')
       return
@@ -357,7 +384,9 @@ export class UiWindow implements GameWindow {
     ctx.textAlign = 'left'
 
     const rowsTop = tableHeaderY + lineHeight * 1.05
-    const rowsBottom = rect.y + rect.height - 7
+    const graphsHeight = 72 // Taller graph container height
+    const graphsGap = 8
+    const rowsBottom = rect.y + rect.height - graphsHeight - graphsGap - 7
     const rowHeight = Math.max(15, Math.min(lineHeight * 1.15, (rowsBottom - rowsTop) / 5.5))
     const visibleRows = Math.max(1, Math.floor((rowsBottom - rowsTop) / rowHeight))
 
@@ -406,9 +435,87 @@ export class UiWindow implements GameWindow {
       ctx.font = smallFont
       ctx.fillStyle = COLORS.dim
       ctx.textAlign = 'right'
-      ctx.fillText(`${this.scrollTop + 1}-${Math.min(this.scrollTop + visibleRows, this.visibleComponents.length)}/${this.visibleComponents.length}`, rect.x + rect.width - pad, rect.y + rect.height - lineHeight * 0.8)
+      ctx.fillText(`${this.scrollTop + 1}-${Math.min(this.scrollTop + visibleRows, this.visibleComponents.length)}/${this.visibleComponents.length}`, rect.x + rect.width - pad, rect.y + rect.height - graphsHeight - graphsGap - lineHeight * 0.8)
       ctx.textAlign = 'left'
     }
+
+    // --- Taller Continuous Line Graphs for Reactor Stability & Power Consumption ---
+    const graphsY = rowsBottom + graphsGap
+    const graphsWidth = rect.width - pad * 2
+    const halfWidth = Math.floor((graphsWidth - 8) / 2)
+
+    const reactorWin = this.manager?.get('reactor') as unknown as { solved?: boolean; computeStability?: () => number } | undefined
+    const currentStability = typeof reactorWin?.computeStability === 'function'
+      ? reactorWin.computeStability()
+      : (this.robotSystem.reactorRestored ? 1 : 0.3)
+
+    const powerWin = this.manager?.get('powerDistribution') as unknown as { powerConsumption?: number; powerOverCapacity?: boolean } | undefined
+    const currentPower = typeof powerWin?.powerConsumption === 'number'
+      ? powerWin.powerConsumption
+      : (this.robotSystem.powerGridPuzzleSolved ? 0.9 : 0.3)
+    const overCapacity = powerWin?.powerOverCapacity ?? (currentPower >= 1)
+
+    // Ensure fallback data if history is empty
+    if (this.stabilityHistory.length === 0) this.stabilityHistory.push(currentStability)
+    if (this.powerHistory.length === 0) this.powerHistory.push(currentPower)
+
+    const drawLineGraph = (subX: number, subY: number, subW: number, subH: number, title: string, history: number[], currentVal: number, isDanger: boolean) => {
+      ctx.fillStyle = COLORS.panelAlt
+      ctx.fillRect(subX, subY, subW, subH)
+      ctx.strokeStyle = COLORS.border
+      ctx.strokeRect(subX + 0.5, subY + 0.5, subW - 1, subH - 1)
+
+      ctx.font = smallFont
+      ctx.fillStyle = COLORS.dim
+      ctx.fillText(this.fitText(ctx, title, subW - 36), subX + 6, subY + 4)
+
+      ctx.textAlign = 'right'
+      ctx.fillStyle = isDanger ? COLORS.redBright : COLORS.bright
+      ctx.fillText(`${Math.round(Math.max(0, Math.min(1, currentVal)) * 100)}%`, subX + subW - 6, subY + 4)
+      ctx.textAlign = 'left'
+
+      // Taller graph plot area
+      const plotX = subX + 6
+      const plotY = subY + 18
+      const plotW = subW - 12
+      const plotH = subH - 22
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(plotX, plotY, plotW, plotH)
+      ctx.clip()
+
+      ctx.strokeStyle = COLORS.grid
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(plotX, plotY + plotH / 2)
+      ctx.lineTo(plotX + plotW, plotY + plotH / 2)
+      ctx.stroke()
+
+      if (history.length >= 2) {
+        const strokeColor = isDanger ? COLORS.redBright : COLORS.green
+        ctx.strokeStyle = strokeColor
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+
+        const step = plotW / Math.max(1, history.length - 1)
+        for (let i = 0; i < history.length; i += 1) {
+          const val = Math.max(0, Math.min(1, history[i]))
+          const hx = plotX + i * step
+          const hy = plotY + plotH - val * plotH
+          if (i === 0) ctx.moveTo(hx, hy)
+          else ctx.lineTo(hx, hy)
+        }
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
+    const stabTitle = this.language === 'ru' ? 'СТАБИЛЬНОСТЬ РЕАКТОРА' : 'REACTOR STABILITY'
+    const powerTitle = this.language === 'ru' ? 'ПОТРЕБЛЕНИЕ ЭНЕРГИИ' : 'POWER CONSUMPTION'
+
+    drawLineGraph(rect.x + pad, graphsY, halfWidth, graphsHeight, stabTitle, this.stabilityHistory, currentStability, currentStability < 0.5)
+    drawLineGraph(rect.x + pad + halfWidth + 8, graphsY, halfWidth, graphsHeight, powerTitle, this.powerHistory, currentPower, overCapacity)
   }
 
   private drawBodyDiagram(ctx: CanvasRenderingContext2D, rect: Rect, font: string, smallFont: string, lineHeight: number): void {
