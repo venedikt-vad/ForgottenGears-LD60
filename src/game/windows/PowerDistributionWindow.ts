@@ -8,6 +8,7 @@ const COLORS = {
   border: 'rgba(31, 122, 73, 0.2)',
   borderBright: '#7dffb0',
   grid: 'rgba(60, 160, 100, 0.0)',
+  gridLine: 'rgba(60, 160, 100, 0.14)',
   cell: 'rgba(8, 28, 16, 0.0)',
   hover: 'rgba(120, 255, 170, 0.12)',
   focus: '#7dffb0',
@@ -52,6 +53,23 @@ const APPEAR_REVEAL = 0.18
 const APPEAR_TOTAL = APPEAR_GRID + APPEAR_SYMBOL
 // Pipes spin this far into place as they appear.
 const APPEAR_SPIN = Math.PI * 0.15
+
+// Screen frame scales and fades in before the grid assembles.
+const APPEAR_FRAME = 0.5
+// Background diagonal lines grow in row by row behind the frame, once it is mostly in.
+const APPEAR_LINES = 0.9
+const APPEAR_LINES_START = APPEAR_FRAME * 0.5
+const APPEAR_LINE_STAGGER = 0.06
+// Spacing of the decorative 45-degree lines running down the background.
+const DIAGONAL_STEP = 200 / 3
+
+// Occasional square points sliding along those lines.
+const POINT_MIN_INTERVAL = 0.3
+const POINT_MAX_INTERVAL = 1.1
+const POINT_MAX_ACTIVE = 6
+const POINT_SPEED_MIN = 90
+const POINT_SPEED_MAX = 200
+const POINT_SIZE = 5
 
 // Random filler fittings for cells the routing network does not pass through.
 // Deliberately excludes the 4-way cross so every tile visibly rotates.
@@ -104,6 +122,16 @@ function clamp01(value: number): number {
   return value <= 0 ? 0 : value >= 1 ? 1 : value
 }
 
+function easeOut(t: number): number {
+  return 1 - (1 - t) * (1 - t)
+}
+
+/** Inner frame rectangle the screen content and background lines live in. */
+function frameRect(width: number, height: number): { x: number; y: number; width: number; height: number } {
+  const inset = MARGIN - 8
+  return { x: inset, y: inset, width: width - inset * 2, height: height - inset * 2 }
+}
+
 function opposite(bit: number): number {
   if (bit === NORTH) return SOUTH
   if (bit === SOUTH) return NORTH
@@ -123,6 +151,15 @@ function shuffle<T>(items: T[]): T[] {
 }
 
 type Terminal = { col: number; row: number; bit: number; name: string }
+
+/** A square point sliding along one of the background diagonal lines. */
+type LinePoint = {
+  /** Row index: the line starts at y offset row * DIAGONAL_STEP inside the frame. */
+  row: number
+  /** Horizontal offset travelled along the line, in px. */
+  u: number
+  speed: number
+}
 
 // Sink order defines the OUTPUT numbers shown on the board and in the side list.
 const SYSTEMS = [
@@ -158,6 +195,12 @@ export class PowerDistributionWindow implements GameWindow {
   private blink: number[] = []
   private appearTime = APPEAR_TOTAL
 
+  // Background diagonals: last known canvas size plus the sliding square points.
+  private bgWidth = 0
+  private bgHeight = 0
+  private spawnTimer = POINT_MIN_INTERVAL
+  private readonly linePoints: LinePoint[] = []
+
   // Grid geometry in CSS px, for mouse hit testing and drawing.
   private gridX = 0
   private gridY = 0
@@ -177,6 +220,9 @@ export class PowerDistributionWindow implements GameWindow {
     this.hoverIndex = -1
     // Replay the show animation each time the window opens.
     this.appearTime = 0
+    // Fresh slide points so none linger from a previous visit.
+    this.linePoints.length = 0
+    this.spawnTimer = POINT_MIN_INTERVAL
     // Re-baseline power so no stray blinks fire during the reveal.
     this.powered = this.computePowered()
     this.prevPowered = this.powered.slice()
@@ -186,6 +232,7 @@ export class PowerDistributionWindow implements GameWindow {
   update(dt: number, input: Input): void {
     this.appearTime += dt
     this.clock += dt
+    this.advanceLinePoints(dt)
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
       this.manager?.show('console')
@@ -223,12 +270,16 @@ export class PowerDistributionWindow implements GameWindow {
     ctx.clearRect(0, 0, width, height)
     ctx.textBaseline = 'top'
 
+    this.bgWidth = width
+    this.bgHeight = height
+
     const fontSize = width < 520 ? 10 : width < 1000 ? 11 : 12
     const lineHeight = Math.ceil(fontSize * 1.32)
 
     this.layout(width, height, fontSize)
 
-    this.drawBackground(ctx, width, height)
+    this.drawFrame(ctx, width, height)
+    this.drawDiagonalLines(ctx, width, height)
     this.drawHeader(ctx, fontSize)
 
     ctx.textAlign = 'left'
@@ -271,12 +322,110 @@ export class PowerDistributionWindow implements GameWindow {
     this.gridY = Math.floor(headerHeight + (availableHeight - this.cellSize * ROWS) / 2)
   }
 
-  private drawBackground(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  /** Outer screen frame; scales and fades into view as the window opens. */
+  private drawFrame(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const t = clamp01(this.appearTime / APPEAR_FRAME)
+    if (t <= 0) return
+
+    const rect = frameRect(width, height)
+    const scale = 0.6 + 0.4 * easeOut(t)
+
+    ctx.save()
+    ctx.globalAlpha = t
+    ctx.translate(width / 2, height / 2)
+    ctx.scale(scale, scale)
+    ctx.translate(-width / 2, -height / 2)
+
     ctx.fillStyle = COLORS.panel
-    ctx.fillRect(MARGIN - 8, MARGIN - 8, width - MARGIN * 2 + 16, height - MARGIN * 2 + 16)
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
     ctx.strokeStyle = this.solved ? COLORS.sinkOn : COLORS.border
     ctx.lineWidth = 2
-    ctx.strokeRect(MARGIN - 8, MARGIN - 8, width - MARGIN * 2 + 16, height - MARGIN * 2 + 16)
+    ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
+
+    ctx.restore()
+  }
+
+  /**
+   * Faint 45-degree lines filling the frame, each row drawn from the left edge
+   * down to the right, with occasional square points sliding along them.
+   */
+  private drawDiagonalLines(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const rect = frameRect(width, height)
+    if (rect.width <= 0 || rect.height <= 0) return
+    const span = rect.width
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(rect.x, rect.y, rect.width, rect.height)
+    ctx.clip()
+
+    ctx.strokeStyle = COLORS.gridLine
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    const rowCount = Math.floor(rect.height / DIAGONAL_STEP) + 1
+    for (let row = 0; row < rowCount; row += 1) {
+      const grow = this.lineGrow(row)
+      if (grow <= 0) continue
+      const y = rect.y + row * DIAGONAL_STEP
+      ctx.moveTo(rect.x, y)
+      ctx.lineTo(rect.x + grow * span, y + grow * span)
+    }
+    ctx.stroke()
+
+    const size = POINT_SIZE
+    ctx.fillStyle = COLORS.borderBright
+    ctx.shadowColor = COLORS.glow
+    ctx.shadowBlur = 6
+    for (const point of this.linePoints) {
+      const yOff = point.row * DIAGONAL_STEP
+      if (yOff > rect.height) continue
+      // The square rides the line only as far as it has been drawn so far.
+      if (point.u > this.lineGrow(point.row) * span) continue
+
+      const maxU = Math.min(span, rect.height - yOff)
+      if (maxU <= 0) continue
+      const travel = point.u / maxU
+      ctx.globalAlpha = travel < 0.15 ? travel / 0.15 : travel > 0.85 ? (1 - travel) / 0.15 : 1
+
+      ctx.fillRect(rect.x + point.u - size / 2, rect.y + yOff + point.u - size / 2, size, size)
+    }
+
+    ctx.restore()
+  }
+
+  /** 0..1 draw progress of one diagonal line row, staggered from the top. */
+  private lineGrow(row: number): number {
+    return clamp01((this.appearTime - APPEAR_LINES_START - row * APPEAR_LINE_STAGGER) / APPEAR_LINES)
+  }
+
+  /** Moves the sliding squares along the diagonals and occasionally spawns a new one. */
+  private advanceLinePoints(dt: number): void {
+    this.spawnTimer -= dt
+
+    const rect = frameRect(this.bgWidth, this.bgHeight)
+    const span = rect.width
+    const maxRow = Math.floor((rect.height - 1) / DIAGONAL_STEP)
+
+    if (
+      this.spawnTimer <= 0 &&
+      span > 0 &&
+      maxRow >= 0 &&
+      this.linePoints.length < POINT_MAX_ACTIVE
+    ) {
+      this.spawnTimer = POINT_MIN_INTERVAL + Math.random() * (POINT_MAX_INTERVAL - POINT_MIN_INTERVAL)
+      this.linePoints.push({
+        row: Math.floor(Math.random() * (maxRow + 1)),
+        u: 0,
+        speed: POINT_SPEED_MIN + Math.random() * (POINT_SPEED_MAX - POINT_SPEED_MIN),
+      })
+    }
+
+    for (let i = this.linePoints.length - 1; i >= 0; i -= 1) {
+      const point = this.linePoints[i]
+      point.u += point.speed * dt
+      const maxU = Math.min(span, rect.height - point.row * DIAGONAL_STEP)
+      if (point.u > maxU) this.linePoints.splice(i, 1)
+    }
   }
 
   private drawHeader(ctx: CanvasRenderingContext2D, fontSize: number): void {
