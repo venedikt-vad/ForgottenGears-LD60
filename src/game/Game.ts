@@ -4,6 +4,7 @@ import { FONT_FAMILY, LOST_LANGUAGE_FAMILY, loadFont } from './fonts'
 import { ConsoleWindow } from './windows/ConsoleWindow'
 import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
 import { MemoryCoreWindow } from './windows/MemoryCoreWindow'
+import { PowerDistributionWindow } from './windows/PowerDistributionWindow'
 import { UiWindow } from './windows/UiWindow'
 import { WindowManager } from './windows/WindowManager'
 import type { GameLanguage } from './windows/GameWindow'
@@ -58,6 +59,7 @@ export class Game {
     })
     const reactor = new ReactorCoreWindow()
     const memoryCore = new MemoryCoreWindow()
+    const powerDistribution = new PowerDistributionWindow()
 
     this.windows
       .register(languageWindow)
@@ -65,11 +67,12 @@ export class Game {
       .register(uiWindow)
       .register(reactor)
       .register(memoryCore)
+      .register(powerDistribution)
 
     // First screen shown when the game starts.
     // this.windows.show('language')
 
-    this.windows.show('memoryCore')
+    this.windows.show('powerDistribution')
   }
 
   start() {

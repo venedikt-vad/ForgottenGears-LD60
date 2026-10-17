@@ -1,0 +1,720 @@
+import { FONT_FAMILY } from '../fonts'
+import type { Input } from '../Input'
+import type { GameWindow } from './GameWindow'
+import type { WindowManager } from './WindowManager'
+
+const COLORS = {
+  panel: 'rgba(5, 20, 12, 0.86)',
+  border: '#1f7a4a',
+  borderBright: '#7dffb0',
+  grid: 'rgba(60, 160, 100, 0.24)',
+  cell: 'rgba(8, 28, 16, 0.6)',
+  hover: 'rgba(120, 255, 170, 0.12)',
+  focus: '#7dffb0',
+  pipe: '#3f8f5f',
+  pipeGlow: 'rgba(120, 255, 150, 0.5)',
+  powered: '#9dffc0',
+  source: '#e6ff5c',
+  sourceGlow: 'rgba(200, 255, 90, 0.5)',
+  sinkOff: '#e05a4a',
+  sinkOn: '#66ff88',
+  dim: '#2f6b45',
+  text: '#bff7cf',
+  bright: '#eaffea',
+  glow: 'rgba(120, 255, 160, 0.3)',
+}
+
+const NORTH = 1
+const EAST = 2
+const SOUTH = 4
+const WEST = 8
+
+const ORDER = [
+  { bit: NORTH, dx: 0, dy: -1 },
+  { bit: EAST, dx: 1, dy: 0 },
+  { bit: SOUTH, dx: 0, dy: 1 },
+  { bit: WEST, dx: -1, dy: 0 },
+] as const
+
+const COLS = 10
+const ROWS = 7
+const MARGIN = 40
+
+// A disconnected cell flickers out with two rapid blinks, like a dying lamp.
+const BLINK_DURATION = 0.36
+// Powered paths pulse gently (a slow sine on glow strength).
+const BREATH_SPEED = 2.6
+
+// Show animation: the grid lines stretch across first, then the pipes flicker in.
+const APPEAR_GRID = 0.5
+const APPEAR_SYMBOL = 1
+const APPEAR_REVEAL = 0.18
+const APPEAR_TOTAL = APPEAR_GRID + APPEAR_SYMBOL
+// Pipes spin this far into place as they appear.
+const APPEAR_SPIN = Math.PI * 0.15
+
+// Random filler fittings for cells the routing network does not pass through.
+// Deliberately excludes the 4-way cross so every tile visibly rotates.
+const DECOR = [
+  NORTH | SOUTH,
+  EAST | WEST,
+  NORTH | EAST,
+  NORTH | WEST,
+  SOUTH | EAST,
+  SOUTH | WEST,
+  NORTH | EAST | SOUTH,
+  NORTH | EAST | WEST,
+  NORTH | SOUTH | WEST,
+  EAST | SOUTH | WEST,
+]
+
+/** Rotates a connection mask 90 degrees clockwise. */
+function rotateMask(mask: number): number {
+  let out = 0
+  if (mask & NORTH) out |= EAST
+  if (mask & EAST) out |= SOUTH
+  if (mask & SOUTH) out |= WEST
+  if (mask & WEST) out |= NORTH
+  return out
+}
+
+/** Number of openings (set bits) in a connection mask. */
+function bitCount(mask: number): number {
+  let count = 0
+  while (mask > 0) {
+    count += mask & 1
+    mask >>= 1
+  }
+  return count
+}
+
+/** Stable pseudo-random 0..1 for a seed, so per-cell delays do not flicker. */
+function hash01(seed: number): number {
+  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453123
+  return x - Math.floor(x)
+}
+
+/** 0..1 reveal progress for a symbol whose staggered delay has just elapsed. */
+function reveal(time: number, delay: number, start: number): number {
+  const p = (time - start - delay) / APPEAR_REVEAL
+  return p <= 0 ? 0 : p >= 1 ? 1 : p
+}
+
+function clamp01(value: number): number {
+  return value <= 0 ? 0 : value >= 1 ? 1 : value
+}
+
+function opposite(bit: number): number {
+  if (bit === NORTH) return SOUTH
+  if (bit === SOUTH) return NORTH
+  if (bit === EAST) return WEST
+  return EAST
+}
+
+/** Shuffles an array in place (Fisher-Yates). */
+function shuffle<T>(items: T[]): T[] {
+  for (let i = items.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const swap = items[i]
+    items[i] = items[j]
+    items[j] = swap
+  }
+  return items
+}
+
+type Terminal = { col: number; row: number; bit: number }
+
+/**
+ * A cyan power-distribution screen: one fixed source feeds three sinks. A grid of
+ * rotatable pipe fittings sits between them; a fitting is live only while power
+ * reaches it from the source. Solved when all three sinks are powered and pointed
+ * outward.
+ */
+export class PowerDistributionWindow implements GameWindow {
+  readonly id = 'powerDistribution'
+
+  private manager: WindowManager | null = null
+  private masks: number[] = []
+  private powered: boolean[] = []
+
+  private sourceIndex = 0
+  private sinks: Terminal[] = []
+  private sinkIndices: number[] = []
+
+  private focusIndex = 0
+  private hoverIndex = -1
+  private wasPointerDown = false
+  private clock = 0
+  private prevPowered: boolean[] = []
+  private blink: number[] = []
+  private appearTime = APPEAR_TOTAL
+
+  // Grid geometry in CSS px, for mouse hit testing and drawing.
+  private gridX = 0
+  private gridY = 0
+  private cellSize = 0
+
+  constructor() {
+    this.generate()
+  }
+
+  onShow(manager: WindowManager): void {
+    this.manager = manager
+    // State is preserved across visits so a partly-routed grid survives reopen.
+    this.wasPointerDown = false
+    this.hoverIndex = -1
+    // Replay the show animation each time the window opens.
+    this.appearTime = 0
+    // Re-baseline power so no stray blinks fire during the reveal.
+    this.powered = this.computePowered()
+    this.prevPowered = this.powered.slice()
+    this.blink = new Array<number>(this.powered.length).fill(0)
+  }
+
+  update(dt: number, input: Input): void {
+    this.appearTime += dt
+    this.clock += dt
+
+    if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
+      this.manager?.show('console')
+      return
+    }
+
+    // Input is locked while the grid and pipes animate in.
+    if (this.appearTime < APPEAR_TOTAL) {
+      this.advancePower(dt)
+      return
+    }
+
+    this.hoverIndex = this.indexAt(input.pointerPosition.x, input.pointerPosition.y)
+
+    const down = input.isPointerDown()
+    if (down && !this.wasPointerDown && this.hoverIndex >= 0) {
+      this.focusIndex = this.hoverIndex
+      if (this.isRotatable(this.hoverIndex)) this.rotate(this.hoverIndex)
+    }
+    this.wasPointerDown = down
+
+    if (input.wasPressed('ArrowLeft')) this.moveFocus(-1, 0)
+    else if (input.wasPressed('ArrowRight')) this.moveFocus(1, 0)
+    else if (input.wasPressed('ArrowUp')) this.moveFocus(0, -1)
+    else if (input.wasPressed('ArrowDown')) this.moveFocus(0, 1)
+    else if (input.wasPressed('Space') || input.wasPressed('Enter')) {
+      if (this.isRotatable(this.focusIndex)) this.rotate(this.focusIndex)
+    }
+
+    this.advancePower(dt)
+  }
+
+  render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    ctx.save()
+    ctx.clearRect(0, 0, width, height)
+    ctx.textBaseline = 'top'
+
+    const fontSize = width < 520 ? 10 : width < 1000 ? 11 : 12
+    const lineHeight = Math.ceil(fontSize * 1.32)
+
+    this.layout(width, height, fontSize)
+
+    this.drawBackground(ctx, width, height)
+    this.drawHeader(ctx, fontSize)
+
+    ctx.textAlign = 'left'
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.text
+    ctx.fillText('GRID LINK // ROUTE POWER TO ALL OUTPUTS', MARGIN, MARGIN + lineHeight + 1)
+
+    this.drawStatus(ctx, width, fontSize, lineHeight)
+    this.drawGrid(ctx)
+
+    ctx.textAlign = 'left'
+    ctx.font = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.dim
+    ctx.fillText('CLICK — ROTATE · ARROWS / SPACE — SELECT · ESC — CONSOLE', MARGIN, height - MARGIN - lineHeight)
+    ctx.restore()
+  }
+
+  private layout(width: number, height: number, fontSize: number): void {
+    const headerHeight = MARGIN + Math.ceil(fontSize * 1.32) * 2 + 12
+    const footerHeight = MARGIN + Math.ceil(fontSize * 1.32)
+    const availableWidth = Math.max(0, width - MARGIN * 2)
+    const availableHeight = Math.max(0, height - headerHeight - footerHeight)
+
+    // Reserve a gutter on every side for the external stubs and IN/OUT labels.
+    const raw = Math.min(availableWidth / COLS, availableHeight / ROWS)
+    const gutter = Math.max(20, raw * 0.65)
+
+    const size = Math.max(
+      0,
+      Math.floor(Math.min((availableWidth - gutter * 2) / COLS, (availableHeight - gutter * 2) / ROWS)),
+    )
+    this.cellSize = size
+    this.gridX = Math.floor((width - this.cellSize * COLS) / 2)
+    this.gridY = Math.floor(headerHeight + (availableHeight - this.cellSize * ROWS) / 2)
+  }
+
+  private drawBackground(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    ctx.fillStyle = COLORS.panel
+    ctx.fillRect(MARGIN - 8, MARGIN - 8, width - MARGIN * 2 + 16, height - MARGIN * 2 + 16)
+    ctx.strokeStyle = this.solved ? COLORS.sinkOn : COLORS.border
+    ctx.lineWidth = 2
+    ctx.strokeRect(MARGIN - 8, MARGIN - 8, width - MARGIN * 2 + 16, height - MARGIN * 2 + 16)
+  }
+
+  private drawHeader(ctx: CanvasRenderingContext2D, fontSize: number): void {
+    ctx.textAlign = 'left'
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
+    ctx.shadowColor = COLORS.glow
+    ctx.shadowBlur = 2
+    ctx.fillStyle = COLORS.text
+    ctx.fillText('POWER DISTRIBUTION', MARGIN, MARGIN)
+    ctx.shadowBlur = 0
+  }
+
+  private drawStatus(ctx: CanvasRenderingContext2D, width: number, fontSize: number, lineHeight: number): void {
+    ctx.textAlign = 'right'
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.bright
+    const done = this.outputsPowered
+    const total = this.sinks.length
+    ctx.fillText(`${done}/${total} ONLINE`, width - MARGIN, MARGIN)
+    ctx.fillStyle = this.solved ? COLORS.sinkOn : COLORS.sinkOff
+    ctx.fillText(this.solved ? 'GRID STABLE' : 'RECOVERY REQUIRED', width - MARGIN, MARGIN + lineHeight + 1)
+    ctx.textAlign = 'left'
+  }
+
+  private drawGrid(ctx: CanvasRenderingContext2D): void {
+    const size = this.cellSize
+    if (size <= 0 || this.masks.length !== COLS * ROWS) return
+
+    const gridWidth = size * COLS
+    const gridHeight = size * ROWS
+    const gridP = clamp01(this.appearTime / APPEAR_GRID)
+
+    // Cell wells fade in with the lattice.
+    if (gridP > 0) {
+      ctx.globalAlpha = gridP
+      ctx.fillStyle = COLORS.cell
+      for (let row = 0; row < ROWS; row += 1) {
+        for (let col = 0; col < COLS; col += 1) {
+          ctx.fillRect(this.gridX + col * size, this.gridY + row * size, size, size)
+        }
+      }
+      ctx.globalAlpha = 1
+    }
+
+    // Lattice lines stretch across: verticals grow down, horizontals grow right.
+    ctx.strokeStyle = COLORS.grid
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    for (let col = 0; col <= COLS; col += 1) {
+      const x = Math.floor(this.gridX + col * size) + 0.5
+      ctx.moveTo(x, this.gridY)
+      ctx.lineTo(x, this.gridY + gridHeight * gridP)
+    }
+    for (let row = 0; row <= ROWS; row += 1) {
+      const y = Math.floor(this.gridY + row * size) + 0.5
+      ctx.moveTo(this.gridX, y)
+      ctx.lineTo(this.gridX + gridWidth * gridP, y)
+    }
+    ctx.stroke()
+
+    // Hover / focus markers (only once the screen has settled).
+    if (this.appearTime >= APPEAR_TOTAL) {
+      if (this.hoverIndex >= 0) {
+        const x = this.gridX + (this.hoverIndex % COLS) * size
+        const y = this.gridY + Math.floor(this.hoverIndex / COLS) * size
+        ctx.fillStyle = COLORS.hover
+        ctx.fillRect(x, y, size, size)
+      }
+      const fx = this.gridX + (this.focusIndex % COLS) * size
+      const fy = this.gridY + Math.floor(this.focusIndex / COLS) * size
+      ctx.strokeStyle = COLORS.focus
+      ctx.lineWidth = 2
+      ctx.strokeRect(fx + 1, fy + 1, size - 2, size - 2)
+    }
+
+    // Pipes flicker in asynchronously.
+    ctx.lineCap = 'butt'
+    ctx.lineJoin = 'miter'
+    for (let index = 0; index < this.masks.length; index += 1) {
+      this.drawPipe(ctx, index)
+    }
+
+    // Terminals.
+    const termT = this.terminalReveal()
+    this.drawSource(ctx, termT)
+    for (const sink of this.sinks) this.drawSink(ctx, sink, termT)
+  }
+
+  /** 0..1 reveal of a pipe tile, staggered per cell. */
+  private pipeReveal(index: number): number {
+    return reveal(this.appearTime, hash01(index * 1.7) * APPEAR_SYMBOL, APPEAR_GRID)
+  }
+
+  /** 0..1 reveal of the IN/OUT terminals, just behind the pipes. */
+  private terminalReveal(): number {
+    return reveal(this.appearTime, APPEAR_SYMBOL * 0.55, APPEAR_GRID)
+  }
+
+  private drawPipe(ctx: CanvasRenderingContext2D, index: number): void {
+    const t = this.pipeReveal(index)
+    if (t <= 0) return
+
+    const size = this.cellSize
+    const col = index % COLS
+    const row = Math.floor(index / COLS)
+    const cx = this.gridX + col * size + size / 2
+    const cy = this.gridY + row * size + size / 2
+    const mask = this.masks[index]
+    const lit = this.isLit(index)
+    // Spin into place: a small turn that eases to zero, no scaling.
+    const eased = 1 - (1 - t) * (1 - t)
+    const angle = (1 - eased) * APPEAR_SPIN
+
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(angle)
+    ctx.lineWidth = Math.max(2, size * 0.1)
+    ctx.strokeStyle = lit ? COLORS.powered : COLORS.pipe
+    if (lit) {
+      const breath = this.breath()
+      ctx.shadowColor = COLORS.pipeGlow
+      ctx.shadowBlur = size * 0.3 * breath
+      ctx.globalAlpha = (0.55 + 0.45 * breath) * t
+    } else {
+      ctx.globalAlpha = t
+    }
+
+    ctx.beginPath()
+    for (const dir of ORDER) {
+      if ((mask & dir.bit) === 0) continue
+      ctx.moveTo(0, 0)
+      ctx.lineTo(dir.dx * size * 0.5, dir.dy * size * 0.5)
+    }
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** Slow sine used to make live paths "breathe". */
+  private breath(): number {
+    return 0.75 + 0.25 * Math.sin(this.clock * BREATH_SPEED)
+  }
+
+  /** A cell is lit while powered, or during the "on" half of a dying-lamp blink. */
+  private isLit(index: number): boolean {
+    if (this.powered[index]) return true
+    if (this.blink[index] <= 0) return false
+    const elapsed = BLINK_DURATION - this.blink[index]
+    const phase = Math.floor(elapsed / (BLINK_DURATION / 4))
+    return phase % 2 === 0
+  }
+
+  /**
+   * Recomputes power and drives the per-cell blink timers: a cell that loses power
+   * starts a two-blink fade-out, and regained power cancels any pending blink.
+   */
+  private advancePower(dt: number): void {
+    const next = this.computePowered()
+
+    if (this.prevPowered.length !== next.length) {
+      this.prevPowered = next.slice()
+      this.blink = new Array<number>(next.length).fill(0)
+      this.powered = next
+      return
+    }
+
+    for (let i = 0; i < next.length; i += 1) {
+      if (this.prevPowered[i] && !next[i]) this.blink[i] = BLINK_DURATION
+      else if (next[i]) this.blink[i] = 0
+
+      if (this.blink[i] > 0) this.blink[i] = Math.max(0, this.blink[i] - dt)
+      this.prevPowered[i] = next[i]
+    }
+    this.powered = next
+  }
+
+  private drawSource(ctx: CanvasRenderingContext2D, alpha: number): void {
+    if (alpha <= 0) return
+    const size = this.cellSize
+    const col = this.sourceIndex % COLS
+    const row = Math.floor(this.sourceIndex / COLS)
+    const cx = this.gridX + col * size + size / 2
+    const cy = this.gridY + row * size + size / 2
+    const dir = ORDER.find((item) => item.bit === WEST)!
+
+    this.drawStub(ctx, cx, cy, dir, COLORS.source, COLORS.sourceGlow, true, alpha)
+    this.drawTerminalLabel(ctx, cx, cy, dir, 'IN', COLORS.source, alpha)
+  }
+
+  private drawSink(ctx: CanvasRenderingContext2D, sink: Terminal, alpha: number): void {
+    if (alpha <= 0) return
+    const size = this.cellSize
+    const col = sink.col
+    const row = sink.row
+    const cx = this.gridX + col * size + size / 2
+    const cy = this.gridY + row * size + size / 2
+    const index = row * COLS + col
+    const live = this.powered[index] && (this.masks[index] & sink.bit) !== 0
+    const color = live ? COLORS.sinkOn : COLORS.sinkOff
+    const dir = ORDER.find((item) => item.bit === sink.bit)!
+
+    this.drawStub(ctx, cx, cy, dir, color, live ? COLORS.pipeGlow : 'rgba(224, 90, 74, 0.45)', live, alpha)
+    this.drawTerminalLabel(ctx, cx, cy, dir, live ? 'OUT*' : 'OUT', color, alpha)
+  }
+
+  /** Draws the external feed line running from a terminal off the grid edge. */
+  private drawStub(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    dir: { bit: number; dx: number; dy: number },
+    color: string,
+    glow: string,
+    lit: boolean,
+    alpha: number,
+  ): void {
+    const size = this.cellSize
+    const breath = lit ? this.breath() : 1
+    ctx.save()
+    ctx.lineCap = 'butt'
+    ctx.lineWidth = Math.max(2, size * 0.1)
+    ctx.strokeStyle = color
+    ctx.shadowColor = glow
+    ctx.shadowBlur = size * 0.3 * breath
+    ctx.globalAlpha = (lit ? 0.55 + 0.45 * breath : 1) * alpha
+    ctx.beginPath()
+    ctx.moveTo(cx + dir.dx * size * 0.5, cy + dir.dy * size * 0.5)
+    ctx.lineTo(cx + dir.dx * size * 1.05, cy + dir.dy * size * 1.05)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** Draws IN/OUT text just beyond a terminal's stub, outside the grid. */
+  private drawTerminalLabel(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    dir: { bit: number; dx: number; dy: number },
+    text: string,
+    color: string,
+    alpha: number,
+  ): void {
+    const size = this.cellSize
+    const fontSize = Math.max(10, Math.floor(size * 0.26))
+    const endX = cx + dir.dx * size * 1.05
+    const endY = cy + dir.dy * size * 1.05
+
+    ctx.save()
+    ctx.globalAlpha = alpha
+    ctx.fillStyle = color
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
+    if (dir.bit === WEST) {
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, endX - 8, endY)
+    } else if (dir.bit === EAST) {
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, endX + 8, endY)
+    } else if (dir.bit === NORTH) {
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'alphabetic'
+      ctx.fillText(text, endX, endY - 8)
+    } else {
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      ctx.fillText(text, endX, endY + 8)
+    }
+    ctx.restore()
+  }
+
+  private moveFocus(dx: number, dy: number): void {
+    const col = (this.focusIndex % COLS + dx + COLS) % COLS
+    const row = (Math.floor(this.focusIndex / COLS) + dy + ROWS) % ROWS
+    this.focusIndex = row * COLS + col
+  }
+
+  private isRotatable(index: number): boolean {
+    return index >= 0 && index < this.masks.length && index !== this.sourceIndex
+  }
+
+  private rotate(index: number): void {
+    this.masks[index] = rotateMask(this.masks[index])
+  }
+
+  private indexAt(x: number, y: number): number {
+    if (this.cellSize <= 0) return -1
+    const col = Math.floor((x - this.gridX) / this.cellSize)
+    const row = Math.floor((y - this.gridY) / this.cellSize)
+    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return -1
+    return row * COLS + col
+  }
+
+  /** True when every sink is powered from the source and faces outward. */
+  private get solved(): boolean {
+    return this.outputsPowered === this.sinks.length && this.sinks.length > 0
+  }
+
+  private get outputsPowered(): number {
+    let count = 0
+    for (let i = 0; i < this.sinkIndices.length; i += 1) {
+      const index = this.sinkIndices[i]
+      if (this.powered[index] && (this.masks[index] & this.sinks[i].bit) !== 0) count += 1
+    }
+    return count
+  }
+
+  /**
+   * Builds a solvable board. A routing network with a maximum of three openings per
+   * cell is grown from the source and tied to each sink, so the solved layout uses
+   * only rotatable fittings (never the 4-way cross). Every piece but the fixed source
+   * is then scrambled; restoring it (or any valid routing) re-powers the sinks.
+   */
+  private generate(): void {
+    const count = COLS * ROWS
+    const MAX_DEGREE = 3
+
+    this.sourceIndex = this.index(0, Math.floor(ROWS / 2))
+    this.sinks = [
+      { col: Math.floor(COLS / 2), row: 0, bit: NORTH },
+      { col: COLS - 1, row: Math.floor(ROWS / 2), bit: EAST },
+      { col: Math.floor(COLS / 2), row: ROWS - 1, bit: SOUTH },
+    ]
+    const sinkCells = new Set(this.sinks.map((sink) => this.index(sink.col, sink.row)))
+
+    let masks: number[] | null = null
+    for (let attempt = 0; attempt < 400 && masks === null; attempt += 1) {
+      const base = new Array<number>(count).fill(0)
+      const visited = new Array<boolean>(count).fill(false)
+
+      // Grow a degree-limited routing network from the source (sinks attached later).
+      visited[this.sourceIndex] = true
+      const stack = [this.sourceIndex]
+      while (stack.length > 0) {
+        const current = stack[stack.length - 1]
+        if (bitCount(base[current]) >= MAX_DEGREE) {
+          stack.pop()
+          continue
+        }
+        const options = this.neighbours(current).filter(
+          (n) => !visited[n] && !sinkCells.has(n) && bitCount(base[n]) < MAX_DEGREE,
+        )
+        if (options.length === 0) {
+          stack.pop()
+          continue
+        }
+        const next = options[0]
+        const dir = this.directionFromTo(current, next)
+        base[current] |= dir
+        base[next] |= opposite(dir)
+        visited[next] = true
+        stack.push(next)
+      }
+
+      // Tie each sink to one routed neighbour, then give it its outward terminal.
+      let ok = true
+      for (const sink of this.sinks) {
+        const si = this.index(sink.col, sink.row)
+        const reachable = this.neighbours(si).filter((n) => visited[n] && bitCount(base[n]) < MAX_DEGREE)
+        if (reachable.length === 0) {
+          ok = false
+          break
+        }
+        const n = reachable[Math.floor(Math.random() * reachable.length)]
+        const dir = this.directionFromTo(si, n)
+        base[si] |= dir
+        base[n] |= opposite(dir)
+        base[si] |= sink.bit
+        visited[si] = true
+      }
+      if (!ok) continue
+
+      // The source always feeds in from the west, and is never rotated.
+      base[this.sourceIndex] |= WEST
+
+      // Untouched cells become rotatable decorative fittings.
+      for (let i = 0; i < count; i += 1) {
+        if (!visited[i]) base[i] = DECOR[i % DECOR.length]
+      }
+
+      // Scramble every piece except the fixed source.
+      const scrambled = new Array<number>(count).fill(0)
+      for (let i = 0; i < count; i += 1) {
+        if (i === this.sourceIndex) {
+          scrambled[i] = base[i]
+          continue
+        }
+        const turns = 1 + Math.floor(Math.random() * 3)
+        let mask = base[i]
+        for (let r = 0; r < turns; r += 1) mask = rotateMask(mask)
+        scrambled[i] = mask
+      }
+      masks = scrambled
+    }
+
+    if (masks === null) {
+      masks = new Array<number>(count).fill(0)
+      for (let i = 0; i < count; i += 1) {
+        masks[i] = i === this.sourceIndex ? WEST | EAST : DECOR[i % DECOR.length]
+      }
+    }
+
+    this.masks = masks
+    this.sinkIndices = this.sinks.map((sink) => this.index(sink.col, sink.row))
+    this.focusIndex = this.index(1, Math.floor(ROWS / 2))
+    this.powered = this.computePowered()
+    // Prime the transition tracker so the initial dark grid does not blink on load.
+    this.prevPowered = this.powered.slice()
+    this.blink = new Array<number>(count).fill(0)
+  }
+
+  private computePowered(): boolean[] {
+    const powered = new Array<boolean>(COLS * ROWS).fill(false)
+    powered[this.sourceIndex] = true
+    const stack = [this.sourceIndex]
+
+    while (stack.length > 0) {
+      const current = stack.pop() as number
+      const col = current % COLS
+      const row = Math.floor(current / COLS)
+      for (const dir of ORDER) {
+        if ((this.masks[current] & dir.bit) === 0) continue
+        const nc = col + dir.dx
+        const nr = row + dir.dy
+        if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue
+        const neighbour = nr * COLS + nc
+        if (!powered[neighbour] && (this.masks[neighbour] & opposite(dir.bit)) !== 0) {
+          powered[neighbour] = true
+          stack.push(neighbour)
+        }
+      }
+    }
+    return powered
+  }
+
+  private index(col: number, row: number): number {
+    return row * COLS + col
+  }
+
+  private neighbours(index: number): number[] {
+    const col = index % COLS
+    const row = Math.floor(index / COLS)
+    const result: number[] = []
+    for (const dir of ORDER) {
+      const nc = col + dir.dx
+      const nr = row + dir.dy
+      if (nc >= 0 && nc < COLS && nr >= 0 && nr < ROWS) result.push(nr * COLS + nc)
+    }
+    return shuffle(result)
+  }
+
+  private directionFromTo(from: number, to: number): number {
+    const dx = (to % COLS) - (from % COLS)
+    const dy = Math.floor(to / COLS) - Math.floor(from / COLS)
+    if (dx === 1) return EAST
+    if (dx === -1) return WEST
+    if (dy === 1) return SOUTH
+    return NORTH
+  }
+}

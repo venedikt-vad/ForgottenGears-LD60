@@ -34,7 +34,7 @@ const PUZZLE_MAX = 12
 
 // Appear animation timings (seconds). Row headers reveal first, then the rest.
 const APPEAR_GRID = 0.5
-const APPEAR_BLINK = 0.9
+const APPEAR_BLINK = 0.1
 const APPEAR_HEADER = 0.5
 const APPEAR_SYMBOL = 1
 const APPEAR_REVEAL = 0.18
