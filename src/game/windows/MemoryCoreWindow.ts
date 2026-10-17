@@ -34,7 +34,7 @@ const PUZZLE_MAX = 12
 
 // Appear animation timings (seconds).
 const APPEAR_GRID = 0.5
-const APPEAR_BLINK = 0.9
+const APPEAR_BLINK = 0.0
 const APPEAR_SYMBOL = 1.4
 const APPEAR_REVEAL = 0.18
 const APPEAR_TOTAL = APPEAR_GRID + Math.max(APPEAR_BLINK, APPEAR_SYMBOL)
@@ -70,9 +70,9 @@ function reveal(time: number, delay: number): number {
 
 /** Table border fades in, blinks a few times, then holds solid. */
 function borderAlpha(time: number): number {
-  const p = (time - APPEAR_GRID) / APPEAR_BLINK
+  const p = (time - 0) / APPEAR_BLINK
   if (p <= 0 || p >= 1) return 1
-  return Math.floor(p * 6) % 2 === 0 ? 1 : 0.1
+  return Math.floor(p * 10) % 2 === 0 ? 1 : 0.1
 }
 
 /** Fill an array with `count` symbols drawn at random from the pool. */
