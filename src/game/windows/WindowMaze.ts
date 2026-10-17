@@ -22,11 +22,16 @@ const COLORS = {
 const TILE_IDLE: MazeCellStyle = {
   background: 'rgba(40, 22, 6, 0.35)', border: '#6d4718', glyph: COLORS.text, glow: COLORS.glow,
 }
+// The tile a run starts from, marked while it is still untouched.
+const TILE_START: MazeCellStyle = {
+  background: 'rgba(120, 88, 18, 0.5)', border: '#ffd27a', glyph: '#fff3d4', glow: 'rgba(255, 215, 140, 0.7)',
+}
+// Scanned tiles are kept bright enough to read on a dim screen.
 const TILE_WALL: MazeCellStyle = {
-  background: 'rgba(90, 20, 10, 0.55)', border: '#8c3a24', glyph: '#ff9a7a', glow: null,
+  background: 'rgba(168, 34, 16, 0.95)', border: '#ff8a62', glyph: '#ffe2d6', glow: 'rgba(255, 120, 80, 0.6)',
 }
 const TILE_PATH: MazeCellStyle = {
-  background: 'rgba(20, 60, 24, 0.55)', border: '#3c7a3a', glyph: '#9fe08a', glow: null,
+  background: 'rgba(28, 126, 46, 0.95)', border: '#7bea86', glyph: '#e6ffdc', glow: 'rgba(130, 255, 160, 0.6)',
 }
 const TILE_ROUTE: MazeCellStyle = {
   background: 'rgba(26, 96, 40, 0.92)', border: '#5fd06a', glyph: '#dcffd2', glow: 'rgba(120, 255, 150, 0.45)',
@@ -67,7 +72,6 @@ export class WindowMaze implements GameWindow {
   private language: GameLanguage = 'ru'
   private readonly onSolved?: () => void
   private appearTime = APPEAR_TOTAL
-  private revealed = false
   private solved = false
   private field: MazeField = loadRandomMaze()
   private readonly rain = new GlyphRain()
@@ -96,7 +100,6 @@ export class WindowMaze implements GameWindow {
     this.scanCooldown = 0
     this.route = []
     this.lastPointer = null
-    this.revealed = false
     this.solved = false
     this.appearTime = 0
   }
@@ -114,7 +117,6 @@ export class WindowMaze implements GameWindow {
       return
     }
 
-    if (input.wasPressed('KeyD')) this.revealed = !this.revealed
     if (this.scanCooldown > 0) this.scanCooldown = Math.max(0, this.scanCooldown - dt)
     if (input.wasPressed('KeyQ')) this.startScan(input)
 
@@ -124,12 +126,8 @@ export class WindowMaze implements GameWindow {
     this.field.update(dt)
   }
 
+  /** The route follows the bare cursor: no button is held while drawing it. */
   private traceRoute(input: Input): void {
-    if (!input.isPointerDown()) {
-      this.lastPointer = null
-      return
-    }
-
     const pointer = input.pointerPosition
     const previous = this.lastPointer ?? pointer
     this.lastPointer = { x: pointer.x, y: pointer.y }
@@ -227,7 +225,7 @@ export class WindowMaze implements GameWindow {
     ctx.fillStyle = this.solved ? COLORS.success : COLORS.dim
     const controls = this.solved
       ? (this.language === 'ru' ? 'ОБХОД ШИНЫ ВОССТАНОВЛЕН  ·  U: UI  ·  ESC / C: КОНСОЛЬ' : 'BUS BYPASS RESTORED  ·  U: UI  ·  ESC / C: CONSOLE')
-      : (this.language === 'ru' ? 'МЫШЬ: ВЕСТИ ОТ ВХОДА ДО ВЫХОДА  ·  Q: СКАН  ·  D: СХЕМА  ·  U: UI  ·  ESC: КОНСОЛЬ' : 'MOUSE: TRACE ENTRANCE TO EXIT  ·  Q: SCAN  ·  D: SCHEMATIC  ·  U: UI  ·  ESC: CONSOLE')
+      : (this.language === 'ru' ? 'МЫШЬ: ВЕСТИ ОТ ВХОДА ДО ВЫХОДА  ·  Q: СКАН  ·  U: UI  ·  ESC: КОНСОЛЬ' : 'MOUSE: TRACE ENTRANCE TO EXIT  ·  Q: SCAN  ·  U: UI  ·  ESC: CONSOLE')
     ctx.fillText(this.fitText(ctx, controls, width - margin * 2), margin + lineHeight, height - margin - lineHeight)
     ctx.globalAlpha = 1
     ctx.restore()
@@ -237,9 +235,9 @@ export class WindowMaze implements GameWindow {
     if (area.width <= 0 || area.height <= 0) return
     const tileSize = Math.min(area.width / this.field.columns, area.height / this.field.rows)
     const styles: MazeTileStyles = tileSize >= GLOW_MIN_TILE
-      ? { idle: TILE_IDLE, wall: TILE_WALL, path: TILE_PATH, route: TILE_ROUTE, flash: TILE_FLASH }
-      : { idle: flatten(TILE_IDLE), wall: flatten(TILE_WALL), path: flatten(TILE_PATH), route: TILE_ROUTE, flash: TILE_FLASH }
-    this.field.draw(ctx, area, styles, alpha, this.revealed)
+      ? { idle: TILE_IDLE, start: TILE_START, wall: TILE_WALL, path: TILE_PATH, route: TILE_ROUTE, flash: TILE_FLASH }
+      : { idle: flatten(TILE_IDLE), start: TILE_START, wall: flatten(TILE_WALL), path: flatten(TILE_PATH), route: TILE_ROUTE, flash: TILE_FLASH }
+    this.field.draw(ctx, area, styles, alpha)
   }
 
   private drawRain(ctx: CanvasRenderingContext2D, area: Rect, alpha: number): void {

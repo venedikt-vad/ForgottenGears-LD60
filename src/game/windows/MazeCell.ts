@@ -31,6 +31,9 @@ const FLASH_PEAK = 0.65
 const RESET_ATTACK = 0.12
 const RESET_RELEASE = 0.5
 
+// Breathing rate of the entrance marker, in radians per second.
+const START_PULSE = 3
+
 export type MazeCellStyle = {
   background: string
   border: string
@@ -39,9 +42,10 @@ export type MazeCellStyle = {
   glow: string | null
 }
 
-/** Idle look, the two looks a scan reveals, and the route's own two layers. */
+/** Idle look, the entrance marker, the two looks a scan reveals, and the route's. */
 export type MazeTileStyles = {
   idle: MazeCellStyle
+  start: MazeCellStyle
   wall: MazeCellStyle
   path: MazeCellStyle
   route: MazeCellStyle
@@ -75,6 +79,8 @@ export class MazeCell {
   private claimed = false
   private flashTime = 0
   private resetTime = -1
+  private start = false
+  private clock = Math.random() * Math.PI * 2
 
   constructor(col: number, row: number, wall: boolean) {
     this.col = col
@@ -90,6 +96,11 @@ export class MazeCell {
   /** True once the player's route has run through this tile. */
   get onRoute(): boolean {
     return this.claimed
+  }
+
+  /** Marks this tile as the entrance, so it stands out before a run begins. */
+  markStart(): void {
+    this.start = true
   }
 
   /** Marks the tile as touched by a scan wave; the strongest hit wins. */
@@ -123,6 +134,8 @@ export class MazeCell {
   }
 
   update(dt: number): void {
+    this.clock += dt
+
     if (this.resetTime >= 0) {
       this.resetTime += dt
       if (this.resetTime > RESET_ATTACK + RESET_RELEASE) this.resetTime = -1
@@ -144,8 +157,8 @@ export class MazeCell {
 
   /**
    * Draws the tile into the square at (x, y). A claimed tile draws its own green
-   * look; otherwise the idle look is painted and the wall/passage look is layered
-   * on as far as the tile is lit, or fully when `reveal` forces the schematic view.
+   * look; otherwise the idle look is painted, the entrance keeps a slow pulse of
+   * its own, and the wall/passage look is layered on as far as the tile is lit.
    */
   draw(
     ctx: CanvasRenderingContext2D,
@@ -154,7 +167,6 @@ export class MazeCell {
     size: number,
     styles: MazeTileStyles,
     alpha = 1,
-    reveal = false,
   ): void {
     if (size <= 0 || alpha <= 0) return
 
@@ -170,10 +182,17 @@ export class MazeCell {
     }
 
     // A fading scan stays readable a little longer than a linear ramp would.
-    const strength = reveal ? 1 : Math.pow(this.lit, 0.6)
+    const strength = Math.pow(this.lit, 0.45)
 
     // The idle layer is pulled back as the color comes up, so the color stays clean.
     this.paint(ctx, left, top, side, styles.idle, alpha * (1 - strength * 0.9))
+
+    if (this.start && strength < 1) {
+      // The entrance breathes, so the player can see where a run begins.
+      const pulse = 0.55 + 0.45 * Math.sin(this.clock * START_PULSE)
+      this.paint(ctx, left, top, side, styles.start, alpha * pulse * (1 - strength))
+    }
+
     if (strength > 0) {
       this.paint(ctx, left, top, side, this.wall ? styles.wall : styles.path, alpha * strength)
     }

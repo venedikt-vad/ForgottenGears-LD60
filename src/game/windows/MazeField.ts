@@ -59,6 +59,9 @@ export class MazeField {
         this.cells[row * this.columns + col] = new MazeCell(col, row, wall)
       }
     }
+
+    // The entrance carries a marker of its own, so a run has a visible start.
+    this.entrance?.markStart()
   }
 
   get tiles(): readonly MazeCell[] {
@@ -177,7 +180,6 @@ export class MazeField {
     area: Rect,
     styles: MazeTileStyles,
     alpha = 1,
-    reveal = false,
   ): void {
     this.cellSize = Math.floor(Math.min(area.width / this.columns, area.height / this.rows))
     if (this.cellSize <= 0) return
@@ -197,7 +199,6 @@ export class MazeField {
         this.cellSize,
         styles,
         alpha,
-        reveal,
       )
     }
   }

@@ -304,9 +304,10 @@ export class WindowMaze implements GameWindow {
     const lit = tileSize >= GLOW_MIN_TILE
 
     const styles: MazeTileStyles = lit
-      ? { idle: TILE_IDLE, wall: TILE_WALL, path: TILE_PATH, route: TILE_ROUTE, flash: TILE_FLASH }
+      ? { idle: TILE_IDLE, start: TILE_IDLE, wall: TILE_WALL, path: TILE_PATH, route: TILE_ROUTE, flash: TILE_FLASH }
       : {
           idle: flatten(TILE_IDLE),
+          start: flatten(TILE_IDLE),
           wall: flatten(TILE_WALL),
           path: flatten(TILE_PATH),
           // The route keeps its glow: there are only ever a few such tiles on screen.
@@ -314,7 +315,7 @@ export class WindowMaze implements GameWindow {
           flash: TILE_FLASH,
         }
 
-    this.field.draw(ctx, area, styles, alpha, this.revealed)
+    this.field.draw(ctx, area, styles, alpha)
   }
 
   /**
