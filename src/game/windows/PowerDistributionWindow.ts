@@ -4,11 +4,11 @@ import type { GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
 
 const COLORS = {
-  panel: 'rgba(5, 20, 12, 0.86)',
-  border: '#1f7a4a',
+  panel: 'rgba(5, 20, 12, 0.0)',
+  border: 'rgba(31, 122, 73, 0.2)',
   borderBright: '#7dffb0',
-  grid: 'rgba(60, 160, 100, 0.24)',
-  cell: 'rgba(8, 28, 16, 0.6)',
+  grid: 'rgba(60, 160, 100, 0.0)',
+  cell: 'rgba(8, 28, 16, 0.0)',
   hover: 'rgba(120, 255, 170, 0.12)',
   focus: '#7dffb0',
   pipe: '#3f8f5f',
@@ -122,7 +122,16 @@ function shuffle<T>(items: T[]): T[] {
   return items
 }
 
-type Terminal = { col: number; row: number; bit: number }
+type Terminal = { col: number; row: number; bit: number; name: string }
+
+// Sink order defines the OUTPUT numbers shown on the board and in the side list.
+const SYSTEMS = [
+  'LEFT LEG',
+  'RIGHT LEG',
+  'LEFT ARM',
+  'RIGHT ARM',
+  'RADIO TRANSMITTER',
+]
 
 /**
  * A cyan power-distribution screen: one fixed source feeds three sinks. A grid of
@@ -153,6 +162,9 @@ export class PowerDistributionWindow implements GameWindow {
   private gridX = 0
   private gridY = 0
   private cellSize = 0
+  // Right-hand output legend geometry.
+  private listX = 0
+  private listWidth = 0
 
   constructor() {
     this.generate()
@@ -226,6 +238,7 @@ export class PowerDistributionWindow implements GameWindow {
 
     this.drawStatus(ctx, width, fontSize, lineHeight)
     this.drawGrid(ctx)
+    this.drawOutputList(ctx, fontSize, lineHeight)
 
     ctx.textAlign = 'left'
     ctx.font = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
@@ -237,19 +250,24 @@ export class PowerDistributionWindow implements GameWindow {
   private layout(width: number, height: number, fontSize: number): void {
     const headerHeight = MARGIN + Math.ceil(fontSize * 1.32) * 2 + 12
     const footerHeight = MARGIN + Math.ceil(fontSize * 1.32)
-    const availableWidth = Math.max(0, width - MARGIN * 2)
     const availableHeight = Math.max(0, height - headerHeight - footerHeight)
 
-    // Reserve a gutter on every side for the external stubs and IN/OUT labels.
-    const raw = Math.min(availableWidth / COLS, availableHeight / ROWS)
+    // Reserve a column on the right for the output legend.
+    this.listWidth = Math.max(150, Math.min(320, width * 0.24))
+    const gap = 24
+    const contentWidth = Math.max(0, width - MARGIN * 2 - this.listWidth - gap)
+    this.listX = width - MARGIN - this.listWidth
+
+    // Reserve a gutter on every side of the grid for the external stubs and labels.
+    const raw = Math.min(contentWidth / COLS, availableHeight / ROWS)
     const gutter = Math.max(20, raw * 0.65)
 
     const size = Math.max(
       0,
-      Math.floor(Math.min((availableWidth - gutter * 2) / COLS, (availableHeight - gutter * 2) / ROWS)),
+      Math.floor(Math.min((contentWidth - gutter * 2) / COLS, (availableHeight - gutter * 2) / ROWS)),
     )
     this.cellSize = size
-    this.gridX = Math.floor((width - this.cellSize * COLS) / 2)
+    this.gridX = MARGIN + Math.floor((contentWidth - this.cellSize * COLS) / 2)
     this.gridY = Math.floor(headerHeight + (availableHeight - this.cellSize * ROWS) / 2)
   }
 
@@ -283,8 +301,69 @@ export class PowerDistributionWindow implements GameWindow {
     ctx.textAlign = 'left'
   }
 
-  private drawGrid(ctx: CanvasRenderingContext2D): void {
-    const size = this.cellSize
+  /** Right-hand legend: each OUTPUT number and the system it feeds. */
+  private drawOutputList(ctx: CanvasRenderingContext2D, fontSize: number, lineHeight: number): void {
+    const alpha = clamp01(this.appearTime / (APPEAR_GRID + APPEAR_SYMBOL * 0.5))
+    if (alpha <= 0 || this.listWidth <= 0) return
+
+    const x = this.listX
+    const width = this.listWidth
+    const top = this.gridY
+    const small = Math.max(8, fontSize - 1)
+    const rowH = lineHeight + 8
+    const panelH = lineHeight + 12 + rowH * this.sinks.length + 10
+
+    ctx.save()
+    ctx.globalAlpha = alpha
+    ctx.textBaseline = 'top'
+
+    ctx.fillStyle = 'rgba(6, 24, 14, 0.6)'
+    ctx.fillRect(x - 10, top - 8, width + 20, panelH)
+    ctx.strokeStyle = COLORS.border
+    ctx.lineWidth = 1
+    ctx.strokeRect(x - 9.5, top - 7.5, width + 19, panelH + 1)
+
+    // Clip content to the panel so long names cannot spill out.
+    ctx.beginPath()
+    ctx.rect(x - 6, top - 8, width + 12, panelH)
+    ctx.clip()
+
+    ctx.textAlign = 'left'
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.text
+    ctx.fillText('OUTPUT BUS', x, top)
+
+    const ruleY = Math.floor(top + lineHeight + 4) + 0.5
+    ctx.strokeStyle = COLORS.dim
+    ctx.beginPath()
+    ctx.moveTo(x, ruleY)
+    ctx.lineTo(x + width, ruleY)
+    ctx.stroke()
+
+    ctx.font = `${small}px "${FONT_FAMILY}", monospace`
+    let y = ruleY + 8
+    for (let i = 0; i < this.sinks.length; i += 1) {
+      const sink = this.sinks[i]
+      const si = this.sinkIndices[i]
+      const live = this.powered[si] && (this.masks[si] & sink.bit) !== 0
+      const color = live ? COLORS.sinkOn : COLORS.sinkOff
+
+      const dot = Math.max(6, Math.floor(small * 0.7))
+      ctx.fillStyle = color
+      ctx.fillRect(x, y + 2, dot, dot)
+
+      ctx.fillStyle = color
+      ctx.fillText(`${i + 1}`, x + dot + 6, y)
+
+      ctx.fillStyle = live ? COLORS.bright : COLORS.text
+      ctx.fillText(sink.name, x + dot + 6 + small * 1.8, y)
+
+      y += rowH
+    }
+    ctx.restore()
+  }
+
+  private drawGrid(ctx: CanvasRenderingContext2D): void {    const size = this.cellSize
     if (size <= 0 || this.masks.length !== COLS * ROWS) return
 
     const gridWidth = size * COLS
@@ -344,7 +423,9 @@ export class PowerDistributionWindow implements GameWindow {
     // Terminals.
     const termT = this.terminalReveal()
     this.drawSource(ctx, termT)
-    for (const sink of this.sinks) this.drawSink(ctx, sink, termT)
+    for (let i = 0; i < this.sinks.length; i += 1) {
+      this.drawSink(ctx, this.sinks[i], i + 1, termT)
+    }
   }
 
   /** 0..1 reveal of a pipe tile, staggered per cell. */
@@ -447,7 +528,7 @@ export class PowerDistributionWindow implements GameWindow {
     this.drawTerminalLabel(ctx, cx, cy, dir, 'IN', COLORS.source, alpha)
   }
 
-  private drawSink(ctx: CanvasRenderingContext2D, sink: Terminal, alpha: number): void {
+  private drawSink(ctx: CanvasRenderingContext2D, sink: Terminal, ordinal: number, alpha: number): void {
     if (alpha <= 0) return
     const size = this.cellSize
     const col = sink.col
@@ -460,7 +541,7 @@ export class PowerDistributionWindow implements GameWindow {
     const dir = ORDER.find((item) => item.bit === sink.bit)!
 
     this.drawStub(ctx, cx, cy, dir, color, live ? COLORS.pipeGlow : 'rgba(224, 90, 74, 0.45)', live, alpha)
-    this.drawTerminalLabel(ctx, cx, cy, dir, live ? 'OUT*' : 'OUT', color, alpha)
+    this.drawTerminalLabel(ctx, cx, cy, dir, `${ordinal}`, color, alpha)
   }
 
   /** Draws the external feed line running from a terminal off the grid edge. */
@@ -577,9 +658,11 @@ export class PowerDistributionWindow implements GameWindow {
 
     this.sourceIndex = this.index(0, Math.floor(ROWS / 2))
     this.sinks = [
-      { col: Math.floor(COLS / 2), row: 0, bit: NORTH },
-      { col: COLS - 1, row: Math.floor(ROWS / 2), bit: EAST },
-      { col: Math.floor(COLS / 2), row: ROWS - 1, bit: SOUTH },
+      { col: Math.floor(COLS * 0.2), row: 0, bit: NORTH, name: SYSTEMS[0] },
+      { col: Math.floor(COLS * 0.7), row: 0, bit: NORTH, name: SYSTEMS[1] },
+      { col: COLS - 1, row: Math.floor(ROWS / 2), bit: EAST, name: SYSTEMS[2] },
+      { col: Math.floor(COLS * 0.2), row: ROWS - 1, bit: SOUTH, name: SYSTEMS[3] },
+      { col: Math.floor(COLS * 0.7), row: ROWS - 1, bit: SOUTH, name: SYSTEMS[4] },
     ]
     const sinkCells = new Set(this.sinks.map((sink) => this.index(sink.col, sink.row)))
 

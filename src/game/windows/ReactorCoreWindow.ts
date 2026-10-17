@@ -1,6 +1,7 @@
 import { FONT_FAMILY } from '../fonts'
 import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
+import type { WindowManager } from './WindowManager'
 
 /** Renders custom content inside the reactor's inner circle. */
 export type ReactorContentRenderer = (
@@ -18,6 +19,8 @@ export type ReactorCoreWindowOptions = {
 
 const COLORS = {
   background: '#0b0904',
+  panel: 'rgba(11, 9, 4, 0.0)',
+  border: 'rgba(224, 170, 51, 0.22)',
   glow: 'rgba(255, 196, 64, 0.4)',
   bright: '#ffd766',
   mid: '#e0aa33',
@@ -29,6 +32,10 @@ const COLORS = {
   track: 'rgba(120, 40, 20, 0.6)',
   stable: '#66ff88',
 }
+
+const MARGIN = 28
+// Spacing of the decorative 45-degree lines running down from the sides.
+const DIAGONAL_STEP = 200 / 3
 
 // Lasers live inside the inner (content) ring: each emitter rides that ring and the
 // beam reflects off the same wall once. The ring's rotation swings the emitter around
@@ -55,6 +62,31 @@ const WAVE_FREQ = 0.06
 const WAVE_SPEED = 2.2
 const WAVE_AMPLITUDE = 22
 const WAVE_NOISE = 18
+
+// Appear animation timeline (seconds): rings snap in one after another, then the
+// core content and lasers, then the readout progress bars fill up.
+const APPEAR_RING = 0.6
+const APPEAR_RING_STAGGER = 0.18
+const APPEAR_CORE = 0.5
+const APPEAR_CORE_START = APPEAR_RING_STAGGER * 2
+const APPEAR_BARS = 0.7
+const APPEAR_BARS_START = 0.5
+const APPEAR_WAVE = 0.6
+const APPEAR_WAVE_START = 0.55
+const APPEAR_LINES = 1.6
+const APPEAR_LINES_START = 0.
+const APPEAR_LINE_STAGGER = 0.08
+const APPEAR_TOTAL = 1.8
+
+/** Eased 0..1 reveal that starts at `start` and finishes `duration` later. */
+function reveal(time: number, duration: number, start: number): number {
+  const t = (time - start) / duration
+  return Math.max(0, Math.min(1, t))
+}
+
+function easeOut(t: number): number {
+  return 1 - (1 - t) * (1 - t)
+}
 
 /** Intersection distances of a ray with a circle, or null if it misses. */
 function rayCircleRoots(
@@ -200,10 +232,13 @@ export class ReactorCoreWindow implements GameWindow {
   private readonly ringAngles = [0, 0, 0]
   private readonly content: ReactorContentRenderer | null
 
+  manager: WindowManager | null = null
+
   private activeRing: number | null = null
   private wasPointerDown = false
   private solved = false
   private time = 0
+  private appearTime = APPEAR_TOTAL
   private cx = 0
   private cy = 0
   private radius = 0
@@ -216,8 +251,15 @@ export class ReactorCoreWindow implements GameWindow {
     this.generatePuzzle()
   }
 
+  onShow(manager: WindowManager): void {
+    this.manager = manager
+  }
+
   update(dt: number, input: Input): void {
     this.time += dt
+    if (this.appearTime < APPEAR_TOTAL) {
+      this.appearTime = Math.min(APPEAR_TOTAL, this.appearTime + dt)
+    }
 
     // Reactor does not scroll; discard wheel input so it never builds up.
     input.consumeWheelDelta()
@@ -227,8 +269,21 @@ export class ReactorCoreWindow implements GameWindow {
       this.nodeGlow[i] = Math.max(0, this.nodeGlow[i] - dt * NODE_FADE)
     }
 
+    // Return to console on request.
+    if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
+      this.manager?.show('console')
+      return
+    }
+
     const delta = input.consumePointerDelta()
     const down = input.isPointerDown()
+
+    // Input stays locked while the screen assembles.
+    if (this.appearTime < APPEAR_TOTAL) {
+      this.activeRing = null
+      this.wasPointerDown = down
+      return
+    }
 
     // Once the puzzle is solved the rings lock in their aligned state.
     if (this.solved) {
@@ -313,20 +368,152 @@ export class ReactorCoreWindow implements GameWindow {
     ctx.save()
     ctx.clearRect(0, 0, width, height)
 
-    this.drawOuterRing(ctx, cx, cy, radius, this.ringAngles[0], this.activeRing === 0)
-    this.drawMiddleRing(ctx, cx, cy, radius * 0.82, this.ringAngles[1], this.activeRing === 1)
-    this.drawInnerRing(ctx, cx, cy, radius * 0.62, this.ringAngles[2], this.activeRing === 2)
+    this.drawFrame(ctx, width, height)
+    this.drawDiagonalLines(ctx, width, height)
 
-    this.drawContent(ctx, cx, cy, radius * 0.46)
+    const now = this.appearTime
+    const ringT = [
+      reveal(now, APPEAR_RING, 0),
+      reveal(now, APPEAR_RING, APPEAR_RING_STAGGER),
+      reveal(now, APPEAR_RING, APPEAR_RING_STAGGER * 2),
+    ]
+    this.drawAppearing(ctx, cx, cy, ringT[0], () =>
+      this.drawOuterRing(ctx, cx, cy, radius, this.ringAngles[0], this.activeRing === 0),
+    )
+    this.drawAppearing(ctx, cx, cy, ringT[1], () =>
+      this.drawMiddleRing(ctx, cx, cy, radius * 0.82, this.ringAngles[1], this.activeRing === 1),
+    )
+    this.drawAppearing(ctx, cx, cy, ringT[2], () =>
+      this.drawInnerRing(ctx, cx, cy, radius * 0.62, this.ringAngles[2], this.activeRing === 2),
+    )
 
-    // Beams sit above everything so the bounce vertex stays visible.
-    this.drawLasers(ctx, cx, cy, radius)
+    const coreT = reveal(now, APPEAR_CORE, APPEAR_CORE_START)
+    this.drawAppearing(ctx, cx, cy, coreT, () => {
+      this.drawContent(ctx, cx, cy, radius * 0.46)
+      // Beams sit above everything so the bounce vertex stays visible.
+      this.drawLasers(ctx, cx, cy, radius)
+    })
 
     // Side readouts: per-node bars + stability gauge (right) and signal trace (left).
     const stability = this.computeStability()
     this.drawReadouts(ctx, width, height, radius, stability)
     this.drawWaveform(ctx, width, height, stability)
 
+    this.drawCaptions(ctx, width, height)
+
+    ctx.restore()
+  }
+
+  /** Outer screen frame, matching the other service screens. Scales into view. */
+  private drawFrame(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const t = reveal(this.appearTime, APPEAR_RING, 0)
+    if (t <= 0) return
+
+    const inset = MARGIN - 8
+    const scale = 0.6 + 0.4 * easeOut(t)
+
+    ctx.save()
+    ctx.globalAlpha = t
+    ctx.translate(width / 2, height / 2)
+    ctx.scale(scale, scale)
+    ctx.translate(-width / 2, -height / 2)
+
+    ctx.fillStyle = COLORS.panel
+    ctx.fillRect(inset, inset, width - inset * 2, height - inset * 2)
+    ctx.strokeStyle = this.solved ? COLORS.stable : COLORS.border
+    ctx.lineWidth = 2
+    ctx.strokeRect(inset, inset, width - inset * 2, height - inset * 2)
+
+    ctx.restore()
+  }
+
+  /**
+   * Faint 45-degree lines running down from the left and right sides, spaced by
+   * DIAGONAL_STEP. Matched lines cross on the centre axis, forming an X down the middle.
+   * On open each line is drawn (stretched) from its side end across to the other.
+   */
+  private drawDiagonalLines(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const base = reveal(this.appearTime, APPEAR_LINES, APPEAR_LINES_START)
+    if (base <= 0) return
+
+    const inset = MARGIN - 8
+    const left = inset
+    const right = width - inset
+    const top = inset
+    const bottom = height - inset
+    const span = right - left
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(left, top, span, bottom - top)
+    ctx.clip()
+
+    ctx.strokeStyle = 'rgba(224, 170, 51, 0.12)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+
+    let row = 0
+    const rows = Math.ceil((bottom - top) / DIAGONAL_STEP) + 4
+    for (let y = top; y <= bottom + DIAGONAL_STEP * 2; y += DIAGONAL_STEP) {
+      // Linear "drawing" progress from the anchored end toward the far end.
+      const rowStart = APPEAR_LINES_START + row * APPEAR_LINE_STAGGER
+      let grow = reveal(this.appearTime, APPEAR_LINES, rowStart)
+      if (grow > 1) grow = 1
+      if (grow > 0) {
+        // Down-right line drawn from the left edge across to the right.
+        ctx.moveTo(left, y)
+        ctx.lineTo(left + grow * span, y + grow * span)
+        // Down-left line drawn from the right edge across to the left.
+        ctx.moveTo(right, y)
+        ctx.lineTo(right - grow * span, y + grow * span)
+      }
+      row += 1
+      if (row > rows) break
+    }
+
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** Headline, subtitle and the bottom controls hint. */
+  private drawCaptions(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const fontSize = width < 560 ? 12 : width < 1100 ? 14 : 16
+
+    ctx.save()
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.bright
+    ctx.shadowColor = COLORS.glow
+    ctx.shadowBlur = 2
+    ctx.fillText('REACTOR CORE', MARGIN, MARGIN)
+    ctx.shadowBlur = 0
+
+    ctx.font = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.dim
+    ctx.fillText('REACTION CONTROL // LASER ALIGNMENT', MARGIN, MARGIN + fontSize * 1.5)
+    ctx.fillText('DRAG RING — ROTATE · ESC / C — CONSOLE', MARGIN, height - MARGIN - fontSize * 0.6)
+
+    ctx.restore()
+  }
+
+  /** Assemble helper: fades and grows a drawing about (cx, cy) as `t` runs 0 -> 1. */
+  private drawAppearing(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    t: number,
+    draw: () => void,
+  ): void {
+    if (t <= 0) return
+    const scale = 0.82 + 0.18 * easeOut(t)
+    ctx.save()
+    ctx.globalAlpha = t
+    ctx.translate(cx, cy)
+    ctx.scale(scale, scale)
+    ctx.translate(-cx, -cy)
+    draw()
     ctx.restore()
   }
 
@@ -645,49 +832,55 @@ export class ReactorCoreWindow implements GameWindow {
     radius: number,
     stability: number,
   ): void {
-    const stabWidth = 30
+    // Bars fill up as the screen assembles.
+    const showAll = reveal(this.appearTime, APPEAR_BARS, APPEAR_BARS_START)
+    if (showAll <= 0) return
+
+    const barWidth = 170
+    const barHeight = 16
+    const gap = 10
+    const barsX = width - MARGIN - barWidth
+    const barsY = MARGIN
+
+    // Stability gauge sits to the left of the node bars.
+    const stabWidth = 34
     const stabHeight = 340
-    const stabX = width - 44 - stabWidth
+    const stabX = barsX - 44 - stabWidth
     const stabY = height / 2 - stabHeight / 2
 
-    const barWidth = 130
-    const barHeight = 12
-    const gap = 8
-    const barsX = stabX - 36 - barWidth
-
     // Skip the readouts when they would collide with the rings.
-    if (barsX - 40 <= width / 2 + radius) return
-
-    const barsHeight = this.nodes.length * barHeight + Math.max(0, this.nodes.length - 1) * gap
-    const barsY = height / 2 - barsHeight / 2
+    if (stabX - 40 <= width / 2 + radius) return
 
     ctx.save()
-    ctx.font = `12px "${FONT_FAMILY}", monospace`
+    ctx.globalAlpha = showAll
+    ctx.font = `13px "${FONT_FAMILY}", monospace`
     ctx.textBaseline = 'middle'
 
     for (let i = 0; i < this.nodes.length; i += 1) {
       const barY = barsY + i * (barHeight + gap)
-      drawProgressBar(ctx, barsX, barY, barWidth, barHeight, this.nodeGlow[i], COLORS.bright)
+      const fill = reveal(this.appearTime, APPEAR_BARS, APPEAR_BARS_START + i * 0.05)
+      drawProgressBar(ctx, barsX, barY, barWidth, barHeight, this.nodeGlow[i] * fill, COLORS.bright)
 
       ctx.textAlign = 'right'
       ctx.fillStyle = COLORS.content
       ctx.fillText(`N${i + 1}`, barsX - 8, barY + barHeight / 2)
     }
 
+    const stabT = reveal(this.appearTime, APPEAR_BARS, APPEAR_BARS_START + this.nodes.length * 0.05)
     drawProgressBar(
       ctx,
       stabX,
       stabY,
       stabWidth,
       stabHeight,
-      stability,
+      stability * stabT,
       this.solved ? COLORS.stable : COLORS.laser,
       true,
     )
 
     ctx.textAlign = 'center'
     ctx.fillStyle = COLORS.content
-    ctx.fillText(`${Math.round(stability * 100)}%`, stabX + stabWidth / 2, stabY - 14)
+    ctx.fillText(`${Math.round(stability * stabT * 100)}%`, stabX + stabWidth / 2, stabY - 14)
     ctx.fillText('STABILITY', stabX + stabWidth / 2, stabY + stabHeight + 18)
 
     ctx.restore()
@@ -700,6 +893,9 @@ export class ReactorCoreWindow implements GameWindow {
     height: number,
     stability: number,
   ): void {
+    const appear = reveal(this.appearTime, APPEAR_WAVE, APPEAR_WAVE_START)
+    if (appear <= 0) return
+
     const panelWidth = 90
     const panelHeight = Math.min(height * 0.6, 340)
     const leftX = 40
@@ -712,6 +908,7 @@ export class ReactorCoreWindow implements GameWindow {
     const noise = WAVE_NOISE * (1 - stability)
 
     ctx.save()
+    ctx.globalAlpha = appear
 
     ctx.strokeStyle = COLORS.dim
     ctx.lineWidth = 1

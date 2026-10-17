@@ -35,8 +35,12 @@ export class Input {
         e.key === 'Enter' ||
         e.key === 'Escape' ||
         e.key === 'Tab' ||
-        e.key === 'ArrowUp' ||
-        e.key === 'ArrowDown' ||
+        e.key === 'Delete' ||
+        e.key === 'Home' ||
+        e.key === 'End' ||
+        e.key === 'PageUp' ||
+        e.key === 'PageDown' ||
+        e.key.startsWith('Arrow') ||
         e.key.length === 1
       )
     ) {
@@ -50,6 +54,9 @@ export class Input {
       e.key === 'Backspace' ||
       e.key === 'Enter' ||
       e.key === 'Escape' ||
+      e.key === 'Delete' ||
+      e.key === 'Home' ||
+      e.key === 'End' ||
       e.key.startsWith('Arrow') ||
       e.key === ' ' ||
       e.key === 'PageUp' ||
