@@ -188,8 +188,8 @@ export class UiWindow implements GameWindow {
     ctx.save()
     // Clear the previous frame. Glow is intentionally drawn after clearing so it stays crisp.
     ctx.clearRect(0, 0, width, height)
-    ctx.fillStyle = COLORS.background
-    ctx.fillRect(0, 0, width, height)
+    // ctx.fillStyle = COLORS.background
+    // ctx.fillRect(0, 0, width, height)
     this.drawGrid(ctx, width, height)
 
     const margin = width < 560 ? 10 : width < 1000 ? 18 : 28
