@@ -251,7 +251,7 @@ export class ReactorCoreWindow implements GameWindow {
     this.generatePuzzle()
   }
 
-  setManager(manager: WindowManager | null): void {
+  onShow(manager: WindowManager): void {
     this.manager = manager
   }
 
