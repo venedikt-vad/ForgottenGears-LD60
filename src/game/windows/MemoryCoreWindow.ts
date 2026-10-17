@@ -32,6 +32,13 @@ const CELL_TARGET = 48
 const PUZZLE_MIN = 7
 const PUZZLE_MAX = 12
 
+// Appear animation timings (seconds).
+const APPEAR_GRID = 0.5
+const APPEAR_BLINK = 0.9
+const APPEAR_SYMBOL = 1.4
+const APPEAR_REVEAL = 0.18
+const APPEAR_TOTAL = APPEAR_GRID + Math.max(APPEAR_BLINK, APPEAR_SYMBOL)
+
 type Rect = { x: number; y: number; width: number; height: number }
 
 type CellGrid = {
@@ -41,6 +48,31 @@ type CellGrid = {
   cellHeight: number
   columns: number
   rows: number
+}
+
+type Appear = {
+  time: number
+  grid: number
+  borderAlpha: number
+}
+
+/** Stable pseudo-random 0..1 for a seed, so per-cell delays don't flicker. */
+function hash01(seed: number): number {
+  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453123
+  return x - Math.floor(x)
+}
+
+/** 0..1 reveal progress for a symbol whose staggered delay has just elapsed. */
+function reveal(time: number, delay: number): number {
+  const p = (time - APPEAR_GRID - delay) / APPEAR_REVEAL
+  return p <= 0 ? 0 : p >= 1 ? 1 : p
+}
+
+/** Table border fades in, blinks a few times, then holds solid. */
+function borderAlpha(time: number): number {
+  const p = (time - APPEAR_GRID) / APPEAR_BLINK
+  if (p <= 0 || p >= 1) return 1
+  return Math.floor(p * 6) % 2 === 0 ? 1 : 0.1
 }
 
 /** Fill an array with `count` symbols drawn at random from the pool. */
@@ -86,6 +118,7 @@ export class MemoryCoreWindow implements GameWindow {
   private puzzleCells = new Set<number>()
   private answers = new Map<number, string>()
   private wasPointerDown = false
+  private appearTime = APPEAR_TOTAL
 
   // Right-table data geometry in CSS px, for mouse hit testing.
   private hitX = 0
@@ -97,13 +130,20 @@ export class MemoryCoreWindow implements GameWindow {
     this.manager = manager
     // State is kept across visits so a half-solved puzzle survives reopen.
     this.wasPointerDown = false
+    // Replay the appear animation each time the window is opened.
+    this.appearTime = 0
   }
 
-  update(_dt: number, input: Input): void {
+  update(dt: number, input: Input): void {
+    this.appearTime += dt
+
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
       this.manager?.show('console')
       return
     }
+
+    // Input is locked while the reveal animation plays.
+    if (this.appearTime < APPEAR_TOTAL) return
 
     // Click to select a right-table cell.
     const down = input.isPointerDown()
@@ -239,8 +279,14 @@ export class MemoryCoreWindow implements GameWindow {
     this.cellW = rightGrid.cellWidth
     this.cellH = rightGrid.cellHeight
 
-    this.drawGlyphTable(ctx, left, leftGrid, pad, baseSize)
-    this.drawCountTable(ctx, right, rightGrid, pad, baseSize)
+    const appear: Appear = {
+      time: this.appearTime,
+      grid: Math.min(1, this.appearTime / APPEAR_GRID),
+      borderAlpha: borderAlpha(this.appearTime),
+    }
+
+    this.drawGlyphTable(ctx, left, leftGrid, pad, baseSize, appear)
+    this.drawCountTable(ctx, right, rightGrid, pad, baseSize, appear)
 
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
@@ -312,40 +358,48 @@ export class MemoryCoreWindow implements GameWindow {
     grid: CellGrid,
     pad: number,
     baseSize: number,
+    appear: Appear,
   ): void {
     ctx.fillStyle = COLORS.panel
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+
+    ctx.globalAlpha = appear.borderAlpha
     ctx.strokeStyle = COLORS.border
     ctx.lineWidth = 1
     ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1)
+    ctx.globalAlpha = 1
 
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     ctx.font = `${baseSize}px "${FONT_FAMILY}", monospace`
+    ctx.globalAlpha = appear.grid
     ctx.fillStyle = COLORS.accent
     ctx.fillText('DATA', rect.x + pad, rect.y + pad * 0.6)
+    ctx.globalAlpha = 1
 
     const width = grid.cellWidth * grid.columns
     const height = grid.cellHeight * grid.rows
 
+    // Grid lines stretch across the panel as it opens.
     ctx.strokeStyle = COLORS.grid
     ctx.lineWidth = 1
     ctx.beginPath()
     for (let column = 0; column <= grid.columns; column += 1) {
       const x = Math.floor(grid.x + column * grid.cellWidth) + 0.5
       ctx.moveTo(x, grid.y)
-      ctx.lineTo(x, grid.y + height)
+      ctx.lineTo(x, grid.y + height * appear.grid)
     }
     for (let row = 0; row <= grid.rows; row += 1) {
       const y = Math.floor(grid.y + row * grid.cellHeight) + 0.5
       ctx.moveTo(grid.x, y)
-      ctx.lineTo(grid.x + width, y)
+      ctx.lineTo(grid.x + width * appear.grid, y)
     }
     ctx.stroke()
 
     const rowTop = grid.y + this.focusRow * grid.cellHeight
     const columnLeft = grid.x + this.focusCol * grid.cellWidth
 
+    ctx.globalAlpha = appear.grid
     ctx.fillStyle = COLORS.highlight
     ctx.fillRect(grid.x, rowTop, width, grid.cellHeight)
     ctx.fillRect(columnLeft, grid.y, grid.cellWidth, height)
@@ -353,19 +407,24 @@ export class MemoryCoreWindow implements GameWindow {
     ctx.strokeStyle = COLORS.accent
     ctx.strokeRect(grid.x + 0.5, Math.floor(rowTop) + 0.5, Math.floor(width) - 1, Math.floor(grid.cellHeight) - 1)
     ctx.strokeRect(Math.floor(columnLeft) + 0.5, grid.y + 0.5, Math.floor(grid.cellWidth) - 1, Math.floor(height) - 1)
+    ctx.globalAlpha = 1
 
     const glyphSize = Math.max(8, Math.floor(Math.min(grid.cellHeight * 0.5, grid.cellWidth * 0.62)))
-    ctx.font = `${glyphSize}px "${LOST_LANGUAGE_FAMILY}", monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
 
     for (let index = 0; index < this.leftSymbols.length; index += 1) {
+      const shown = reveal(appear.time, hash01(index * 1.13) * APPEAR_SYMBOL)
+      if (shown <= 0) continue
+
       const column = index % grid.columns
       const row = Math.floor(index / grid.columns)
       const centerX = grid.x + column * grid.cellWidth + grid.cellWidth / 2
       const centerY = grid.y + row * grid.cellHeight + grid.cellHeight / 2
       const lit = row === this.focusRow || column === this.focusCol
 
+      ctx.globalAlpha = shown
+      ctx.font = `${Math.round(glyphSize * (0.5 + 0.5 * shown))}px "${LOST_LANGUAGE_FAMILY}", monospace`
       ctx.fillStyle = lit ? COLORS.bright : COLORS.text
       if (lit) {
         ctx.shadowColor = COLORS.glow
@@ -374,6 +433,7 @@ export class MemoryCoreWindow implements GameWindow {
       ctx.fillText(this.leftSymbols[index], centerX, centerY)
       if (lit) ctx.shadowBlur = 0
     }
+    ctx.globalAlpha = 1
   }
 
   /** Right panel: header letters plus the counting table the player can fill in. */
@@ -383,9 +443,12 @@ export class MemoryCoreWindow implements GameWindow {
     grid: CellGrid,
     pad: number,
     baseSize: number,
+    appear: Appear,
   ): void {
     ctx.fillStyle = COLORS.panel
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+
+    ctx.globalAlpha = appear.borderAlpha
     ctx.strokeStyle = COLORS.border
     ctx.lineWidth = 1
     ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1)
@@ -400,9 +463,11 @@ export class MemoryCoreWindow implements GameWindow {
       ctx.shadowBlur = 0
       ctx.lineWidth = 1
     }
+    ctx.globalAlpha = 1
 
     ctx.textBaseline = 'top'
     ctx.font = `${baseSize}px "${FONT_FAMILY}", monospace`
+    ctx.globalAlpha = appear.grid
     ctx.textAlign = 'left'
     ctx.fillStyle = COLORS.accent
     ctx.fillText('CHECKSUM', rect.x + pad, rect.y + pad * 0.6)
@@ -419,12 +484,14 @@ export class MemoryCoreWindow implements GameWindow {
       ctx.fillText(`${this.solvedCount()}/${this.puzzleCells.size}`, rect.x + rect.width - pad, rect.y + pad * 0.6)
     }
     ctx.textAlign = 'left'
+    ctx.globalAlpha = 1
 
     const dataX = grid.x + grid.cellWidth
     const dataY = grid.y
     const width = grid.cellWidth * (grid.columns + 1)
     const height = grid.cellHeight * grid.rows
 
+    ctx.globalAlpha = appear.grid
     ctx.fillStyle = COLORS.headerBg
     ctx.fillRect(grid.x, grid.y, grid.cellWidth, height)
 
@@ -450,22 +517,25 @@ export class MemoryCoreWindow implements GameWindow {
         grid.cellHeight,
       )
     }
+    ctx.globalAlpha = 1
 
+    // Grid lines stretch across the panel as it opens.
     ctx.strokeStyle = COLORS.grid
     ctx.lineWidth = 1
     ctx.beginPath()
     for (let column = 0; column <= grid.columns + 1; column += 1) {
       const x = Math.floor(grid.x + column * grid.cellWidth) + 0.5
       ctx.moveTo(x, grid.y)
-      ctx.lineTo(x, grid.y + height)
+      ctx.lineTo(x, grid.y + height * appear.grid)
     }
     for (let row = 0; row <= grid.rows; row += 1) {
       const y = Math.floor(grid.y + row * grid.cellHeight) + 0.5
       ctx.moveTo(grid.x, y)
-      ctx.lineTo(grid.x + width, y)
+      ctx.lineTo(grid.x + width * appear.grid, y)
     }
     ctx.stroke()
 
+    ctx.globalAlpha = appear.grid
     ctx.strokeStyle = COLORS.accent
     ctx.lineWidth = 2
     ctx.strokeRect(
@@ -475,14 +545,19 @@ export class MemoryCoreWindow implements GameWindow {
       Math.floor(grid.cellHeight) - 2,
     )
     ctx.lineWidth = 1
+    ctx.globalAlpha = 1
 
     const headerSize = Math.max(8, Math.floor(Math.min(grid.cellHeight * 0.56, grid.cellWidth * 0.72)))
-    ctx.font = `${headerSize}px "${LOST_LANGUAGE_FAMILY}", monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
 
     for (let row = 0; row < grid.rows; row += 1) {
+      const shown = reveal(appear.time, hash01(row * 1.13 + 2000) * APPEAR_SYMBOL)
+      if (shown <= 0) continue
+
       const lit = row === this.focusRow
+      ctx.globalAlpha = shown
+      ctx.font = `${Math.round(headerSize * (0.5 + 0.5 * shown))}px "${LOST_LANGUAGE_FAMILY}", monospace`
       ctx.fillStyle = lit ? COLORS.bright : COLORS.accent
       if (lit) {
         ctx.shadowColor = COLORS.glow
@@ -497,11 +572,13 @@ export class MemoryCoreWindow implements GameWindow {
     }
 
     const valueSize = Math.max(9, Math.floor(Math.min(grid.cellHeight * 0.5, grid.cellWidth * 0.56)))
-    ctx.font = `${valueSize}px "${FONT_FAMILY}", monospace`
 
     for (let row = 0; row < grid.rows; row += 1) {
       for (let column = 0; column < grid.columns; column += 1) {
         const index = row * grid.columns + column
+        const shown = reveal(appear.time, hash01(index * 1.13 + 1000) * APPEAR_SYMBOL)
+        if (shown <= 0) continue
+
         const isPuzzle = this.puzzleCells.has(index)
         const focused = row === this.focusRow && column === this.focusCol
         const answer = isPuzzle ? this.answers.get(index) ?? '' : String(this.values[index])
@@ -515,6 +592,8 @@ export class MemoryCoreWindow implements GameWindow {
           : focused
             ? COLORS.bright
             : COLORS.text
+        ctx.globalAlpha = shown
+        ctx.font = `${Math.round(valueSize * (0.5 + 0.5 * shown))}px "${FONT_FAMILY}", monospace`
         ctx.fillStyle = color
         if (isPuzzle || focused) {
           ctx.shadowColor = color
@@ -528,5 +607,6 @@ export class MemoryCoreWindow implements GameWindow {
         if (isPuzzle || focused) ctx.shadowBlur = 0
       }
     }
+    ctx.globalAlpha = 1
   }
 }
