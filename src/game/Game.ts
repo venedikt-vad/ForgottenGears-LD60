@@ -1,10 +1,10 @@
 import { Input } from './Input'
 import { FONT_FAMILY, loadFont } from './fonts'
-import { ConsoleWindow } from './ConsoleWindow'
-import { LanguageSelectWindow } from './LanguageSelectWindow'
-import { UiWindow } from './UiWindow'
-import { WindowManager } from './WindowManager'
-import type { GameLanguage } from './GameWindow'
+import { ConsoleWindow } from './windows/ConsoleWindow'
+import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
+import { UiWindow } from './windows/UiWindow'
+import { WindowManager } from './windows/WindowManager'
+import type { GameLanguage } from './windows/GameWindow'
 
 export type GameOptions = {
   canvas: HTMLCanvasElement

@@ -1,5 +1,5 @@
-import { FONT_FAMILY } from './fonts'
-import type { Input } from './Input'
+import { FONT_FAMILY } from '../fonts'
+import type { Input } from '../Input'
 import type { GameLanguage, GameWindow } from './GameWindow'
 
 /** A deliberately tiny, centered language picker. */
@@ -7,8 +7,11 @@ export class LanguageSelectWindow implements GameWindow {
   readonly id = 'language'
 
   private selectedIndex = 0
+  private readonly onSelect: (language: GameLanguage) => void
 
-  constructor(private readonly onSelect: (language: GameLanguage) => void) {}
+  constructor(onSelect: (language: GameLanguage) => void) {
+    this.onSelect = onSelect
+  }
 
   update(_dt: number, input: Input): void {
     input.consumeWheelDelta()
@@ -26,8 +29,7 @@ export class LanguageSelectWindow implements GameWindow {
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
-    ctx.fillStyle = '#020402'
-    ctx.fillRect(0, 0, width, height)
+    ctx.clearRect(0,0,  width, height)
 
     const boxWidth = Math.min(280, width - 24)
     const boxHeight = 126

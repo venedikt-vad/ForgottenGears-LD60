@@ -1,5 +1,5 @@
-import { FONT_FAMILY } from './fonts'
-import type { Input } from './Input'
+import { FONT_FAMILY } from '../fonts'
+import type { Input } from '../Input'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
 

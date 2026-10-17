@@ -1,4 +1,4 @@
-import type { Input } from './Input'
+import type { Input } from '../Input'
 import type { WindowManager } from './WindowManager'
 
 export type GameLanguage = 'ru' | 'en'

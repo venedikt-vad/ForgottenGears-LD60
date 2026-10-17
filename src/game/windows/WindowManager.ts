@@ -1,12 +1,15 @@
-import type { Input } from './Input'
+import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
 
 /** Stores window instances and changes which one receives input and renders. */
 export class WindowManager {
   private readonly windows = new Map<string, GameWindow>()
   private activeWindow: GameWindow | null = null
+  private readonly input: Input
 
-  constructor(private readonly input: Input) {}
+  constructor(input: Input) {
+    this.input = input
+  }
 
   register(window: GameWindow): this {
     if (this.windows.has(window.id)) {

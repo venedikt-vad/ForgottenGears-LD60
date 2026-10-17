@@ -6,10 +6,10 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 
 - `Game.ts` — window-system integration while retaining the original game loop, player movement, scene drawing, resize handling, font loading, and glow-canvas mirror.
 - `Input.ts` — keyboard input with key-repeat text entry, continuous Backspace support, and mouse-wheel delta for console scrolling.
-- `GameWindow.ts` and `WindowManager.ts` — shared interface and state-preserving window manager.
-- `LanguageSelectWindow.ts` — a tiny, centered language picker.
-- `ConsoleWindow.ts` — old-school BIOS/POST layout with a framed boot banner, aligned hardware and memory tables, module progress bars, an error log, 168 animated diagnostic records (including failures and warnings), persistent transcript, scrollback, a text-based Y/N prompt, and terminal commands.
-- `UiWindow.ts` — robot-maintenance utility panel.
+- `windows/GameWindow.ts` and `windows/WindowManager.ts` — shared interface and state-preserving window manager.
+- `windows/LanguageSelectWindow.ts` — a tiny, centered language picker.
+- `windows/ConsoleWindow.ts` — old-school BIOS/POST layout with a framed boot banner, aligned hardware and memory tables, module progress bars, an error log, 168 animated diagnostic records (including failures and warnings), persistent transcript, scrollback, a text-based Y/N prompt, and terminal commands.
+- `windows/UiWindow.ts` — robot-maintenance utility panel.
 
 ## Start sequence
 
@@ -40,4 +40,4 @@ In the maintenance utility, use Up/Down or 1–4 to select a component and Enter
 
 ## Integration
 
-Place these files beside your existing `Game.ts`, `Input.ts`, and `fonts.ts`. Replace `Game.ts` and `Input.ts` with the included versions, and add the remaining files. Do not replace `fonts.ts` or move the font asset.
+Window code lives in the `windows/` directory. `GameWindow.ts`, `WindowManager.ts`, and the concrete window implementations are re-exported from there and imported by `Game.ts` as `./windows/<File>`. Keep `Game.ts`, `Input.ts`, and `fonts.ts` in `src/game/`, and do not move the font asset.
