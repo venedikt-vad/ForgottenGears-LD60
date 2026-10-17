@@ -112,8 +112,7 @@ export class ConsoleWindow implements GameWindow {
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
-    ctx.fillStyle = '#020402'
-    ctx.fillRect(0, 0, width, height)
+    ctx.clearRect(0, 0, width, height)
 
     // Smaller IBM BIOS text and tight leading show many more rows at once.
     const margin = width < 560 ? 8 : 12
