@@ -10,6 +10,12 @@ export class Input {
   private pressedKeyValues: string[] = []
   private wheelDeltaY = 0
 
+  private pointerX = 0
+  private pointerY = 0
+  private pointerDeltaX = 0
+  private pointerDeltaY = 0
+  private pointerDown = false
+
   private readonly onKeyDown = (e: KeyboardEvent) => {
     const state = this.keys.get(e.code)
     if (!state?.down) {
@@ -41,12 +47,36 @@ export class Input {
     e.preventDefault()
   }
 
+  private readonly onPointerDown = (e: PointerEvent) => {
+    this.pointerDown = true
+    this.pointerX = e.clientX
+    this.pointerY = e.clientY
+  }
+
+  private readonly onPointerUp = (e: PointerEvent) => {
+    this.pointerDown = false
+    this.pointerX = e.clientX
+    this.pointerY = e.clientY
+  }
+
+  private readonly onPointerMove = (e: PointerEvent) => {
+    if (this.pointerDown) {
+      this.pointerDeltaX += e.clientX - this.pointerX
+      this.pointerDeltaY += e.clientY - this.pointerY
+    }
+    this.pointerX = e.clientX
+    this.pointerY = e.clientY
+  }
+
   private readonly onBlur = () => {
     this.keys.clear()
     this.pressedThisFrame.clear()
     this.releasedThisFrame.clear()
     this.pressedKeyValues.length = 0
     this.wheelDeltaY = 0
+    this.pointerDown = false
+    this.pointerDeltaX = 0
+    this.pointerDeltaY = 0
   }
 
   attach(target: Window = window) {
@@ -54,6 +84,9 @@ export class Input {
     target.addEventListener('keyup', this.onKeyUp)
     target.addEventListener('blur', this.onBlur)
     target.addEventListener('wheel', this.onWheel, { passive: false })
+    target.addEventListener('pointerdown', this.onPointerDown)
+    target.addEventListener('pointerup', this.onPointerUp)
+    target.addEventListener('pointermove', this.onPointerMove)
   }
 
   detach(target: Window = window) {
@@ -61,6 +94,9 @@ export class Input {
     target.removeEventListener('keyup', this.onKeyUp)
     target.removeEventListener('blur', this.onBlur)
     target.removeEventListener('wheel', this.onWheel)
+    target.removeEventListener('pointerdown', this.onPointerDown)
+    target.removeEventListener('pointerup', this.onPointerUp)
+    target.removeEventListener('pointermove', this.onPointerMove)
   }
 
   isDown(code: string): boolean {
@@ -87,9 +123,27 @@ export class Input {
     return value
   }
 
+  isPointerDown(): boolean {
+    return this.pointerDown
+  }
+
+  get pointerPosition(): { x: number; y: number } {
+    return { x: this.pointerX, y: this.pointerY }
+  }
+
+  /** Pointer movement in pixels since the previous call; resets after reading. */
+  consumePointerDelta(): { x: number; y: number } {
+    const delta = { x: this.pointerDeltaX, y: this.pointerDeltaY }
+    this.pointerDeltaX = 0
+    this.pointerDeltaY = 0
+    return delta
+  }
+
   endFrame() {
     this.pressedThisFrame.clear()
     this.releasedThisFrame.clear()
     this.pressedKeyValues.length = 0
+    this.pointerDeltaX = 0
+    this.pointerDeltaY = 0
   }
 }

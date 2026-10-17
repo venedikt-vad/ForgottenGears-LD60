@@ -6,6 +6,7 @@ import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
 import { UiWindow } from './windows/UiWindow'
 import { WindowManager } from './windows/WindowManager'
 import type { GameLanguage } from './windows/GameWindow'
+import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
 
 export type GameOptions = {
   canvas: HTMLCanvasElement
@@ -54,14 +55,18 @@ export class Game {
       uiWindow.setLanguage(language)
       this.windows.show('console')
     })
+    const reactor = new ReactorCoreWindow()
 
     this.windows
       .register(languageWindow)
       .register(consoleWindow)
       .register(uiWindow)
+      .register(reactor)
 
     // First screen shown when the game starts.
-    this.windows.show('language')
+    // this.windows.show('language')
+
+    this.windows.show('reactor')
   }
 
   start() {
