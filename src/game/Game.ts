@@ -112,7 +112,7 @@ export class Game {
     // First screen shown when the game starts.
     // this.windows.show('language')
 
-    this.windows.show('maze')
+    this.windows.show('reactor')
   }
 
   start() {

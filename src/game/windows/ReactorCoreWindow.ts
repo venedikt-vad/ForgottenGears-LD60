@@ -46,6 +46,20 @@ const LASER_SPIN = [2, -1.5, 1.3]
 const LASER_OFFSET = [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3]
 const CORE_SCALE = 0.46
 
+// Big, faint background rings half-off the left/right/top edges. Each one trails a
+// primary ring at its own pace when that ring is turned (negative = counter-spin).
+// ox/oy nudge the centre so the group never sits perfectly centred (primary-radius
+// units), letting the rings peek in at uneven, organic angles. Each ring is sized
+// so it exactly touches the primary ring that drives it.
+const DECOR_RINGS = [
+  { ring: 0, anchor: 'left', pace: -0.45, ox: 0.04, oy: -0.22 },
+  { ring: 1, anchor: 'top', pace: 0.7, ox: 0.16, oy: -0.06 },
+  { ring: 2, anchor: 'right', pace: 1.6, ox: -0.08, oy: 0.27 },
+] as const
+
+// Primary ring radii as a fraction of the outer ring, indexed by ring number.
+const PRIMARY_SCALES = [1, 0.82, 0.62]
+
 // Activation nodes sit on the lasers' paths: they are laid on the beams at a solved
 // rotation, then the rings are scrambled. The hit radius is kept small so the player
 // has to line each beam up precisely.
@@ -57,11 +71,20 @@ const NODE_MIN_SPACING = 0.2
 const MAX_PUZZLE_ATTEMPTS = 60
 
 // Left-side signal monitor. The trace scrolls vertically; its noise shrinks as the
-// reactor stabilizes (noise scales with 1 - stability).
+// reactor stabilizes (noise scales with 1 - stability). It sits beside a second
+// monitor that plots the recent stability history as a line graph.
 const WAVE_FREQ = 0.06
 const WAVE_SPEED = 2.2
-const WAVE_AMPLITUDE = 22
-const WAVE_NOISE = 18
+const WAVE_AMPLITUDE = 30
+const WAVE_NOISE = 22
+const MONITOR_WIDTH = 132
+const STABILITY_WIDTH = 132
+const MONITOR_GAP = 16
+const MONITOR_MAX_HEIGHT = 600
+// Stability history sampling: one point every STABILITY_SAMPLE seconds, capped at
+// STABILITY_SAMPLES points (newest at the bottom of the vertical graph).
+const STABILITY_SAMPLE = 0.1
+const STABILITY_SAMPLES = 120
 
 // Appear animation timeline (seconds): rings snap in one after another, then the
 // core content and lasers, then the readout progress bars fill up.
@@ -87,6 +110,21 @@ function reveal(time: number, duration: number, start: number): number {
 function easeOut(t: number): number {
   return 1 - (1 - t) * (1 - t)
 }
+
+/** Angle in radians to a fixed-width, 0..360 degree readout. */
+function formatAngle(radians: number): string {
+  const deg = ((radians * 180) / Math.PI) % 360
+  const wrapped = deg < 0 ? deg + 360 : deg
+  return `${wrapped.toFixed(1)}°`.padStart(7)
+}
+
+/** Font size shared by the bottom-right telemetry block and the dial row. */
+function telemetryFontSize(width: number): number {
+  return width < 560 ? 11 : width < 1100 ? 12 : 14
+}
+
+/** Number of telemetry rows in the bottom-right angles block. */
+const ANGLE_ROWS = 6
 
 /** Intersection distances of a ray with a circle, or null if it misses. */
 function rayCircleRoots(
@@ -230,6 +268,7 @@ export class ReactorCoreWindow implements GameWindow {
   readonly id: string
 
   private readonly ringAngles = [0, 0, 0]
+  private readonly decorAngles = [0, 0, 0]
   private readonly content: ReactorContentRenderer | null
 
   manager: WindowManager | null = null
@@ -245,6 +284,10 @@ export class ReactorCoreWindow implements GameWindow {
   private readonly nodes: Node[] = []
   private readonly nodeGlow: number[] = []
 
+  // Rolling window of stability samples for the left-hand history graph.
+  private readonly stabilitySamples: number[] = []
+  private stabilityTimer = 0
+
   constructor(options: ReactorCoreWindowOptions = {}) {
     this.id = options.id ?? 'reactor'
     this.content = options.content ?? null
@@ -253,6 +296,8 @@ export class ReactorCoreWindow implements GameWindow {
 
   onShow(manager: WindowManager): void {
     this.manager = manager
+    // Replay the whole appear timeline each time the window opens.
+    this.appearTime = 0
   }
 
   update(dt: number, input: Input): void {
@@ -267,6 +312,14 @@ export class ReactorCoreWindow implements GameWindow {
     // Let freshly activated nodes cool back down.
     for (let i = 0; i < this.nodeGlow.length; i += 1) {
       this.nodeGlow[i] = Math.max(0, this.nodeGlow[i] - dt * NODE_FADE)
+    }
+
+    // Sample stability at a fixed rate for the history graph.
+    this.stabilityTimer += dt
+    while (this.stabilityTimer >= STABILITY_SAMPLE) {
+      this.stabilityTimer -= STABILITY_SAMPLE
+      this.stabilitySamples.push(this.computeStability())
+      if (this.stabilitySamples.length > STABILITY_SAMPLES) this.stabilitySamples.shift()
     }
 
     // Return to console on request.
@@ -303,6 +356,12 @@ export class ReactorCoreWindow implements GameWindow {
     if (down && this.activeRing !== null) {
       const spin = delta.x * 0.006 + delta.y * 0.003
       this.ringAngles[this.activeRing] += spin
+      // The big background rings trail their primary ring at their own pace.
+      for (let i = 0; i < DECOR_RINGS.length; i += 1) {
+        if (DECOR_RINGS[i].ring === this.activeRing) {
+          this.decorAngles[i] += spin * DECOR_RINGS[i].pace
+        }
+      }
     }
 
     this.wasPointerDown = down
@@ -370,6 +429,7 @@ export class ReactorCoreWindow implements GameWindow {
 
     this.drawFrame(ctx, width, height)
     this.drawDiagonalLines(ctx, width, height)
+    this.drawDecorRings(ctx, width, cx, cy, radius)
 
     const now = this.appearTime
     const ringT = [
@@ -381,10 +441,10 @@ export class ReactorCoreWindow implements GameWindow {
       this.drawOuterRing(ctx, cx, cy, radius, this.ringAngles[0], this.activeRing === 0),
     )
     this.drawAppearing(ctx, cx, cy, ringT[1], () =>
-      this.drawMiddleRing(ctx, cx, cy, radius * 0.82, this.ringAngles[1], this.activeRing === 1),
+      this.drawMiddleRing(ctx, cx, cy, radius * PRIMARY_SCALES[1], this.ringAngles[1], this.activeRing === 1),
     )
     this.drawAppearing(ctx, cx, cy, ringT[2], () =>
-      this.drawInnerRing(ctx, cx, cy, radius * 0.62, this.ringAngles[2], this.activeRing === 2),
+      this.drawInnerRing(ctx, cx, cy, radius * PRIMARY_SCALES[2], this.ringAngles[2], this.activeRing === 2),
     )
 
     const coreT = reveal(now, APPEAR_CORE, APPEAR_CORE_START)
@@ -397,9 +457,10 @@ export class ReactorCoreWindow implements GameWindow {
     // Side readouts: per-node bars + stability gauge (right) and signal trace (left).
     const stability = this.computeStability()
     this.drawReadouts(ctx, width, height, radius, stability)
-    this.drawWaveform(ctx, width, height, stability)
+    this.drawMonitors(ctx, width, height, stability)
 
     this.drawCaptions(ctx, width, height)
+    this.drawAngles(ctx, width, height)
 
     ctx.restore()
   }
@@ -498,6 +559,36 @@ export class ReactorCoreWindow implements GameWindow {
     ctx.restore()
   }
 
+  /** Bottom-right telemetry: the current ring rotations and laser beam angles. */
+  private drawAngles(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const fontSize = telemetryFontSize(width)
+    const lineHeight = Math.round(fontSize * 1.4)
+
+    const rows: string[] = []
+    for (let i = 0; i < this.ringAngles.length; i += 1) {
+      rows.push(`RING ${i + 1}  ${formatAngle(this.ringAngles[i])}`)
+    }
+    for (let i = 0; i < this.ringAngles.length; i += 1) {
+      const path = laserPath(i, this.ringAngles[i])
+      const beam = Math.atan2(path.hitY - path.originY, path.hitX - path.originX)
+      rows.push(`LASER ${i + 1}  ${formatAngle(beam)}`)
+    }
+
+    ctx.save()
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'bottom'
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.mid
+
+    let y = height - MARGIN
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      ctx.fillText(rows[i], width - MARGIN, y)
+      y -= lineHeight
+    }
+
+    ctx.restore()
+  }
+
   /** Assemble helper: fades and grows a drawing about (cx, cy) as `t` runs 0 -> 1. */
   private drawAppearing(
     ctx: CanvasRenderingContext2D,
@@ -526,6 +617,70 @@ export class ReactorCoreWindow implements GameWindow {
     if (distance < 0.72) return 2
     if (distance < 0.9) return 1
     return 0
+  }
+
+  /**
+   * Large, faint rings anchored half-off the left edge, the top and the right edge.
+   * They trail the primary rings at different paces when the player turns them, and
+   * each is sized to touch the very ring that drives it.
+   */
+  private drawDecorRings(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    cx: number,
+    cy: number,
+    primary: number,
+  ): void {
+    const t = reveal(this.appearTime, APPEAR_RING, 0)
+    if (t <= 0) return
+
+    ctx.save()
+    ctx.globalAlpha = 0.5 * t
+
+    for (let i = 0; i < DECOR_RINGS.length; i += 1) {
+      const spec = DECOR_RINGS[i]
+      const anchorX = spec.anchor === 'left' ? MARGIN : spec.anchor === 'right' ? width - MARGIN : cx
+      const anchorY = spec.anchor === 'top' ? MARGIN : cy
+      // Offset the centre so the rings are not perfectly centred on their edge.
+      const x = anchorX + primary * spec.ox
+      const y = anchorY + primary * spec.oy
+      const angle = this.decorAngles[i]
+
+      // Touching the driven ring: radius = distance between the two centres minus
+      // the driven ring's own radius.
+      const drivenRadius = primary * PRIMARY_SCALES[spec.ring]
+      const distance = Math.hypot(x - cx, y - cy)
+      const ringRadius = distance - drivenRadius
+      if (ringRadius <= 16) continue
+
+      // Faint base circle.
+      ctx.strokeStyle = COLORS.dim
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(x, y, ringRadius, 0, Math.PI * 2)
+      ctx.stroke()
+
+      // Brighter arc plus an off-side marker so the slow rotation reads clearly.
+      ctx.strokeStyle = COLORS.mid
+      ctx.lineWidth = 6
+      ctx.beginPath()
+      ctx.arc(x, y, ringRadius, angle, angle + 0.5)
+      ctx.stroke()
+
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.moveTo(
+        x + Math.cos(angle + Math.PI) * (ringRadius - 18),
+        y + Math.sin(angle + Math.PI) * (ringRadius - 18),
+      )
+      ctx.lineTo(
+        x + Math.cos(angle + Math.PI) * (ringRadius + 8),
+        y + Math.sin(angle + Math.PI) * (ringRadius + 8),
+      )
+      ctx.stroke()
+    }
+
+    ctx.restore()
   }
 
   private drawOuterRing(
@@ -883,11 +1038,79 @@ export class ReactorCoreWindow implements GameWindow {
     ctx.fillText(`${Math.round(stability * stabT * 100)}%`, stabX + stabWidth / 2, stabY - 14)
     ctx.fillText('STABILITY', stabX + stabWidth / 2, stabY + stabHeight + 18)
 
+    // Ring rotation dials sit under the node bars, right-aligned with them.
+    const dialTop = barsY + this.nodes.length * (barHeight + gap) + 26
+    this.drawRingDials(ctx, barsX + barWidth, dialTop, width, height)
+
     ctx.restore()
   }
 
-  /** Left-side signal trace; its noise fades out as stability approaches 100%. */
-  private drawWaveform(
+  /**
+   * Large dials stacked down the right edge, one per ring, each drawing the ring's
+   * current rotation as a needle. Skipped when the bottom telemetry would collide.
+   */
+  private drawRingDials(
+    ctx: CanvasRenderingContext2D,
+    rightX: number,
+    topY: number,
+    width: number,
+    height: number,
+  ): void {
+    const radius = 28
+    const spacing = 40
+    const count = this.ringAngles.length
+    const stride = radius * 2 + spacing
+    const total = count * stride - spacing + 18
+
+    // Room needed below for the dials themselves plus the bottom telemetry block.
+    const telemetry = ANGLE_ROWS * Math.round(telemetryFontSize(width) * 1.4)
+    if (topY + total > height - MARGIN - telemetry - 8) return
+
+    ctx.save()
+    ctx.lineWidth = 2
+
+    for (let i = 0; i < count; i += 1) {
+      const cx = rightX - radius
+      const cy = topY + radius + i * stride
+
+      // Dial face.
+      ctx.strokeStyle = COLORS.dim
+      ctx.beginPath()
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+      ctx.stroke()
+
+      // Needle at the ring's rotation.
+      const angle = this.ringAngles[i]
+      ctx.strokeStyle = COLORS.bright
+      ctx.shadowColor = COLORS.glow
+      ctx.shadowBlur = 8
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.lineTo(cx + Math.cos(angle) * (radius - 4), cy + Math.sin(angle) * (radius - 4))
+      ctx.stroke()
+      ctx.shadowBlur = 0
+
+      // Hub and label.
+      ctx.fillStyle = COLORS.mid
+      ctx.beginPath()
+      ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.font = `12px "${FONT_FAMILY}", monospace`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = COLORS.dim
+      ctx.fillText(`R${i + 1}`, cx, cy + radius + 4)
+    }
+
+    ctx.restore()
+  }
+
+  /**
+   * Left-side monitors: the live signal trace and, beside it, a line graph of the
+   * recent stability history. Both are skipped when the rings crowd the left edge.
+   */
+  private drawMonitors(
     ctx: CanvasRenderingContext2D,
     width: number,
     height: number,
@@ -896,19 +1119,34 @@ export class ReactorCoreWindow implements GameWindow {
     const appear = reveal(this.appearTime, APPEAR_WAVE, APPEAR_WAVE_START)
     if (appear <= 0) return
 
-    const panelWidth = 90
-    const panelHeight = Math.min(height * 0.6, 340)
-    const leftX = 40
+    const panelHeight = Math.min(height * 0.8, MONITOR_MAX_HEIGHT)
+    const leftX = MARGIN
     const topY = height / 2 - panelHeight / 2
+    const graphX = leftX + MONITOR_WIDTH + MONITOR_GAP
 
-    // Skip when it would collide with the rings.
-    if (leftX + panelWidth + 16 >= width / 2 - this.radius) return
-
-    const centerX = leftX + panelWidth / 2
-    const noise = WAVE_NOISE * (1 - stability)
+    // Skip when they would collide with the rings.
+    if (graphX + STABILITY_WIDTH + 16 >= width / 2 - this.radius) return
 
     ctx.save()
     ctx.globalAlpha = appear
+
+    this.drawWaveformPanel(ctx, leftX, topY, MONITOR_WIDTH, panelHeight, stability)
+    this.drawStabilityPanel(ctx, graphX, topY, STABILITY_WIDTH, panelHeight)
+
+    ctx.restore()
+  }
+
+  /** Live signal trace; its noise fades out as stability approaches 100%. */
+  private drawWaveformPanel(
+    ctx: CanvasRenderingContext2D,
+    leftX: number,
+    topY: number,
+    panelWidth: number,
+    panelHeight: number,
+    stability: number,
+  ): void {
+    const centerX = leftX + panelWidth / 2
+    const noise = WAVE_NOISE * (1 - stability)
 
     ctx.strokeStyle = COLORS.dim
     ctx.lineWidth = 1
@@ -928,7 +1166,85 @@ export class ReactorCoreWindow implements GameWindow {
       else ctx.lineTo(x, y)
     }
     ctx.stroke()
+    ctx.shadowBlur = 0
+  }
 
-    ctx.restore()
+  /**
+   * Vertical line graph of the recent stability value: time runs down the panel
+   * (newest at the bottom) and the value runs across it.
+   */
+  private drawStabilityPanel(
+    ctx: CanvasRenderingContext2D,
+    leftX: number,
+    topY: number,
+    panelWidth: number,
+    panelHeight: number,
+  ): void {
+    ctx.strokeStyle = COLORS.dim
+    ctx.lineWidth = 1
+    ctx.strokeRect(leftX, topY, panelWidth, panelHeight)
+
+    const padX = 10
+    const padY = 14
+    const gx = leftX + padX
+    const gy = topY + padY
+    const gw = panelWidth - padX * 2
+    const gh = panelHeight - padY * 2
+    const latest = this.stabilitySamples[this.stabilitySamples.length - 1] ?? this.computeStability()
+
+    // Vertical quarter gridlines.
+    ctx.strokeStyle = 'rgba(224, 170, 51, 0.18)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    for (let i = 1; i < 4; i += 1) {
+      const x = gx + (gw * i) / 4
+      ctx.moveTo(x, gy)
+      ctx.lineTo(x, gy + gh)
+    }
+    ctx.stroke()
+
+    const color = this.solved ? COLORS.stable : COLORS.laser
+    const samples = this.stabilitySamples
+    const span = STABILITY_SAMPLES - 1
+
+    if (samples.length >= 2) {
+      // Value runs across the graph; the newest sample sits at the bottom edge.
+      const pointX = (value: number): number => gx + gw * value
+      const pointY = (i: number): number => gy + gh * (1 - (samples.length - 1 - i) / span)
+
+      // Faint area between the curve and the 0% edge.
+      ctx.beginPath()
+      ctx.moveTo(gx, pointY(0))
+      for (let i = 0; i < samples.length; i += 1) {
+        ctx.lineTo(pointX(samples[i]), pointY(i))
+      }
+      ctx.lineTo(gx, pointY(samples.length - 1))
+      ctx.closePath()
+      ctx.fillStyle = this.solved ? 'rgba(102, 255, 136, 0.16)' : 'rgba(255, 59, 48, 0.16)'
+      ctx.fill()
+
+      ctx.strokeStyle = color
+      ctx.shadowColor = this.solved ? COLORS.glow : COLORS.laserGlow
+      ctx.shadowBlur = 8
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      for (let i = 0; i < samples.length; i += 1) {
+        const x = pointX(samples[i])
+        const y = pointY(i)
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+      ctx.shadowBlur = 0
+    }
+
+    // Current value readout and caption.
+    ctx.font = `13px "${FONT_FAMILY}", monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = color
+    ctx.fillText(`${Math.round(latest * 100)}%`, leftX + panelWidth / 2, topY - 12)
+    ctx.fillStyle = COLORS.dim
+    ctx.fillText('STABILITY', leftX + panelWidth / 2, topY + panelHeight + 14)
   }
 }
