@@ -1,4 +1,5 @@
 import { Input } from './Input'
+import { CursorDrawer } from './CursorDrawer'
 import { FONT_FAMILY, loadFont } from './fonts'
 import { ConsoleWindow } from './windows/ConsoleWindow'
 import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
@@ -18,6 +19,7 @@ export class Game {
   readonly glowCtx: CanvasRenderingContext2D
   readonly input: Input
   readonly windows: WindowManager
+  readonly cursor: CursorDrawer
 
   private width = 0
   private height = 0
@@ -43,6 +45,7 @@ export class Game {
 
     this.input = new Input()
     this.windows = new WindowManager(this.input)
+    this.cursor = new CursorDrawer()
 
     const consoleWindow = new ConsoleWindow()
     const uiWindow = new UiWindow()
@@ -74,6 +77,7 @@ export class Game {
       })
 
     this.input.attach()
+    this.cursor.attach(this.canvas)
     window.addEventListener('resize', this.onResize)
     this.resize()
 
@@ -84,6 +88,7 @@ export class Game {
   stop() {
     this.running = false
     this.input.detach()
+    this.cursor.detach()
     window.removeEventListener('resize', this.onResize)
   }
 
@@ -157,6 +162,9 @@ export class Game {
 
     // Draw the active window on top of the existing game scene.
     this.windows.render(ctx, this.width, this.height)
+
+    // Cursor reticle is always on top.
+    this.cursor.draw(ctx, this.width, this.height)
   }
 
   private mirrorToGlow() {

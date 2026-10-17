@@ -1,4 +1,5 @@
 import { FONT_FAMILY } from '../fonts'
+import { ImageDrawer } from '../ImageDrawer'
 import type { Input } from '../Input'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
@@ -12,6 +13,9 @@ export class UiWindow implements GameWindow {
   private selectedIndex = 0
   private inspectedIndex: number | null = null
 
+  private bodyImg: ImageDrawer | null = null
+  private readonly schemeImage = new Image()
+
   private readonly parts = [
     { ru: 'ГОЛОВА / КАМЕРЫ', en: 'HEAD / CAMERAS' },
     { ru: 'ЛЕВАЯ РУКА', en: 'LEFT ARM' },
@@ -19,12 +23,22 @@ export class UiWindow implements GameWindow {
     { ru: 'ЦЕНТРАЛЬНЫЙ БЛОК', en: 'CORE UNIT' },
   ]
 
+  constructor() {
+    this.schemeImage.src = `${import.meta.env.BASE_URL}robot_scheme/scheme_01.png`
+  }
+
   setLanguage(language: GameLanguage): void {
     this.language = language
   }
 
   onShow(manager: WindowManager): void {
     this.manager = manager
+    this.bodyImg = new ImageDrawer({
+      image: this.schemeImage,
+      beginTime: performance.now(),
+      position: { x: 0, y: 0 },
+      size: { width: 0, height: 0 },
+    })
   }
 
   update(_dt: number, input: Input): void {
@@ -55,8 +69,7 @@ export class UiWindow implements GameWindow {
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
-    ctx.fillStyle = '#020602'
-    ctx.fillRect(0, 0, width, height)
+    ctx.clearRect(0,0,  width, height)
 
     const margin = width < 560 ? 14 : 34
     const fontSize = width < 560 ? 13 : width < 1100 ? 16 : 18
@@ -65,6 +78,9 @@ export class UiWindow implements GameWindow {
     const y = margin
     const font = `${fontSize}px "${FONT_FAMILY}", monospace`
     const smallFont = `${Math.max(10, fontSize - 3)}px "${FONT_FAMILY}", monospace`
+
+    const scheme = this.drawScheme(ctx, width, height, margin)
+    const contentRight = scheme ? scheme.x - lineHeight : width - margin
 
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
@@ -98,7 +114,7 @@ export class UiWindow implements GameWindow {
       if (width > 760) {
         ctx.textAlign = 'right'
         ctx.fillStyle = '#ff765e'
-        ctx.fillText(status, width - margin, itemY)
+        ctx.fillText(status, contentRight, itemY)
         ctx.textAlign = 'left'
       } else {
         ctx.font = smallFont
@@ -108,7 +124,7 @@ export class UiWindow implements GameWindow {
     })
 
     const detailY = Math.min(height - lineHeight * 4, listStartY + this.parts.length * lineHeight * 1.35 + lineHeight)
-    this.drawRule(ctx, x, detailY, width - margin * 2)
+    this.drawRule(ctx, x, detailY, contentRight - x)
     ctx.font = font
     if (this.inspectedIndex !== null) {
       ctx.fillStyle = '#ff765e'
@@ -122,7 +138,7 @@ export class UiWindow implements GameWindow {
       ctx.fillText(this.language === 'ru' ? 'ENTER — ЗАПУСТИТЬ ДИАГНОСТИКУ УЗЛА' : 'ENTER — RUN COMPONENT DIAGNOSTICS', x, detailY + lineHeight)
     }
 
-    this.drawRule(ctx, x, height - margin - lineHeight * 2, width - margin * 2)
+    this.drawRule(ctx, x, height - margin - lineHeight * 2, contentRight - x)
     ctx.font = smallFont
     ctx.fillStyle = '#659e5c'
     ctx.fillText(
@@ -134,6 +150,31 @@ export class UiWindow implements GameWindow {
     )
 
     ctx.restore()
+  }
+
+  /**
+   * Draws the robot schematic on the right side, scaled to fit while keeping the
+   * source aspect ratio. Returns its rect so the text column can stay clear of it.
+   */
+  private drawScheme(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    margin: number,
+  ): { x: number; y: number; width: number; height: number } | null {
+    if (!this.bodyImg || width < 900) return null
+
+    const aspect = 687 / 1024
+    const schemeHeight = Math.min(height - margin * 2, height * 0.82)
+    const schemeWidth = schemeHeight * aspect
+    const schemeX = width - margin - schemeWidth
+    const schemeY = (height - schemeHeight) / 2
+
+    this.bodyImg.position = { x: schemeX, y: schemeY }
+    this.bodyImg.size = { width: schemeWidth, height: schemeHeight }
+    this.bodyImg.draw(ctx)
+
+    return { x: schemeX, y: schemeY, width: schemeWidth, height: schemeHeight }
   }
 
   private drawRule(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
