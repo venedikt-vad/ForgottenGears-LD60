@@ -72,7 +72,7 @@ export class Game {
     // First screen shown when the game starts.
     // this.windows.show('language')
 
-    this.windows.show('powerDistribution')
+    this.windows.show('reactor')
   }
 
   start() {
