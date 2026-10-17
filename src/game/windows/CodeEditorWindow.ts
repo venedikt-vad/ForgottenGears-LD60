@@ -1,4 +1,4 @@
-import type { Input } from '../Input'
+import type { Input, InputKeyEvent } from '../Input'
 import { FONT_FAMILY } from '../fonts'
 import { VirtualFileSystem } from '../VirtualFileSystem'
 import type { GameLanguage, GameWindow } from './GameWindow'
@@ -6,6 +6,25 @@ import type { WindowManager } from './WindowManager'
 
 type EditorMode = 'NORMAL' | 'INSERT' | 'COMMAND' | 'SEARCH'
 type Pane = 'files' | 'editor'
+
+interface HitRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface EditorPointerLayout {
+  width: number
+  height: number
+  filePane: HitRect
+  editorPane: HitRect
+  fileList: HitRect & {
+    lineHeight: number
+    firstIndex: number
+    visibleRows: number
+  }
+}
 
 export interface CodeEditorOptions {
   fileSystem?: VirtualFileSystem
@@ -18,8 +37,8 @@ const DEFAULT_FILE = '/opt/firmware/motion/оптимизатор_акселер
 const EDITABLE_EXTENSION = /\.(drv|seq|cfg|txt|conf|asm|src|md)$/i
 
 /**
- * Retro code editor with a small Vim-like modal command set.
- * It edits the in-game VirtualFileSystem, not files on the host computer.
+ * Canvas-based Vim-like editor for the in-game virtual filesystem.
+ * File selection works with both the mouse and keyboard.
  */
 export class CodeEditorWindow implements GameWindow {
   readonly id = 'editor'
@@ -56,56 +75,87 @@ export class CodeEditorWindow implements GameWindow {
   private messageIsError = false
   private readonly maxUndo = 80
 
+  private pointerCanvas: HTMLCanvasElement | null = null
+  private pointerListenersAttached = false
+  private pointerLayout: EditorPointerLayout | null = null
+
+  private readonly onCanvasPointerDown = (event: PointerEvent): void => {
+    this.handleCanvasPointer(event, false)
+  }
+
+  private readonly onCanvasDoubleClick = (event: MouseEvent): void => {
+    this.handleCanvasPointer(event, true)
+  }
+
   constructor(options: CodeEditorOptions = {}) {
     this.fileSystem = options.fileSystem ?? new VirtualFileSystem()
     this.returnWindowId = options.returnWindowId ?? 'ui'
     this.onValidate = options.onValidate
     this.refreshFileList()
+
     const wanted = options.initialPath ?? DEFAULT_FILE
     const initial = this.files.findIndex((path) => path.toLowerCase() === wanted.toLowerCase())
     this.selectedFileIndex = initial >= 0 ? initial : 0
-    if (this.files[this.selectedFileIndex]) this.loadFile(this.files[this.selectedFileIndex])
+    if (this.files[this.selectedFileIndex]) this.loadFile(this.files[this.selectedFileIndex]!)
   }
 
   setLanguage(language: GameLanguage): void {
     this.language = language
-    if (!this.isDirty()) this.loadFile(this.currentPath || this.files[this.selectedFileIndex] || '')
+    if (!this.isDirty()) {
+      this.loadFile(this.currentPath || this.files[this.selectedFileIndex] || '')
+    }
   }
 
   onShow(manager: WindowManager): void {
     this.manager = manager
     this.refreshFileList()
-    if (!this.currentPath && this.files.length) this.loadFile(this.files[this.selectedFileIndex]!)
+    if (!this.currentPath && this.files.length) {
+      this.loadFile(this.files[this.selectedFileIndex]!)
+    }
   }
 
-  /** Open a virtual file. Returns false when the path is not present. */
+  /** Open a virtual file. Returns false if it does not exist or edits would be lost. */
   openFile(path: string, force = false): boolean {
     if (this.isDirty() && !force) {
-      this.setMessage(this.language === 'ru'
-        ? 'Есть несохранённые изменения. Используйте :w или :e! <путь>.'
-        : 'Unsaved changes. Use :w or :e! <path>.', true)
+      this.setMessage(
+        this.language === 'ru'
+          ? 'Есть несохранённые изменения. Используйте :w или :e! <путь>.'
+          : 'Unsaved changes. Use :w or :e! <path>.',
+        true,
+      )
       return false
     }
+
     const normalized = path.trim().replace(/\\/g, '/').toLowerCase()
     const resolved = this.files.find((entry) => entry.toLowerCase() === normalized)
     if (!resolved || !this.fileSystem.read(resolved, this.language)) {
-      this.setMessage(this.language === 'ru' ? `ФАЙЛ НЕ НАЙДЕН: ${path}` : `FILE NOT FOUND: ${path}`, true)
+      this.setMessage(
+        this.language === 'ru' ? `ФАЙЛ НЕ НАЙДЕН: ${path}` : `FILE NOT FOUND: ${path}`,
+        true,
+      )
       return false
     }
+
     this.loadFile(resolved)
     return true
   }
 
-  update(dt: number, input: Input): void {
-    this.blinkClock += dt
-    for (const key of input.getPressedKeyValues()) {
-      if (this.mode === 'INSERT') this.handleInsertKey(key)
-      else if (this.mode === 'COMMAND' || this.mode === 'SEARCH') this.handleCommandLineKey(key)
-      else this.handleNormalKey(key)
+  update(_dt: number, input: Input): void {
+    this.blinkClock += _dt
+    for (const event of input.getPressedKeyEvents()) {
+      if (this.mode === 'INSERT') {
+        this.handleInsertKey(event.key)
+      } else if (this.mode === 'COMMAND' || this.mode === 'SEARCH') {
+        this.handleCommandLineKey(event.key)
+      } else {
+        this.handleNormalKey(this.normalizeNormalModeKey(event))
+      }
     }
   }
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    this.attachPointerInput(ctx.canvas)
+
     ctx.save()
     ctx.fillStyle = '#241200'
     ctx.fillRect(0, 0, width, height)
@@ -118,37 +168,15 @@ export class CodeEditorWindow implements GameWindow {
     const tinyFont = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
     const normalFont = `${fontSize}px "${FONT_FAMILY}", monospace`
     const boldFont = `bold ${fontSize}px "${FONT_FAMILY}", monospace`
-    const titleFont = `bold ${fontSize + 2}px "${FONT_FAMILY}", monospace`
 
-    // Top navigation strip mirrors the maintenance/file-system UI.
-    const topBarHeight = Math.max(30, lineHeight * 2)
-    ctx.fillStyle = '#613000'
-    ctx.fillRect(0, 0, width, topBarHeight)
-    ctx.fillStyle = '#e4a000'
-    ctx.fillRect(margin, 3, width - margin * 2, 1)
-    const tabs = this.language === 'ru'
-      ? ['КОНСОЛЬ', 'SD-РАДИО', 'ФАЙЛЫ', 'РЕДАКТОР']
-      : ['CONSOLE', 'SD-RADIO', 'FILES', 'EDITOR']
-    let tabX = margin + 6
-    ctx.font = tinyFont
-    for (let i = 0; i < tabs.length; i += 1) {
-      const tabW = Math.max(68, ctx.measureText(tabs[i]!).width + 24)
-      ctx.fillStyle = i === 3 ? '#a65a00' : '#412000'
-      ctx.fillRect(tabX, 5, tabW, topBarHeight - 9)
-      ctx.strokeStyle = i === 3 ? '#ffd42a' : '#9c6500'
-      ctx.strokeRect(tabX + 0.5, 5.5, tabW - 1, topBarHeight - 10)
-      ctx.fillStyle = i === 3 ? '#fff06b' : '#d3a323'
-      ctx.fillText(tabs[i]!, tabX + 10, 11)
-      tabX += tabW + 5
-    }
-    ctx.textAlign = 'right'
-    ctx.font = tinyFont
-    ctx.fillStyle = '#ffd34e'
-    ctx.fillText('VIM-LIKE EDITOR // MCM-740', width - margin, 11)
-    ctx.textAlign = 'left'
-
-    const bodyTop = topBarHeight + 8
-    const footerHeight = Math.max(62, lineHeight * 4.2)
+    // Reserve a larger, single help panel at the bottom. Narrow screens get
+    // extra height because the longer help lines may wrap.
+    const compactFooterLayout = width < 700
+    const bodyTop = Math.max(8, margin)
+    const footerHeight = Math.min(
+      Math.max(150, Math.floor(height * 0.48)),
+      compactFooterLayout ? 290 : 230,
+    )
     const bodyBottom = Math.max(bodyTop + lineHeight * 5, height - footerHeight - 9)
     const bodyHeight = bodyBottom - bodyTop
     const filePaneWidth = Math.max(150, Math.min(width * 0.31, width - 200))
@@ -167,15 +195,43 @@ export class CodeEditorWindow implements GameWindow {
     ctx.textAlign = 'right'
     ctx.font = tinyFont
     ctx.fillStyle = '#d59b20'
-    ctx.fillText(`${this.files.length} FILES`, fileX + fileWidth - 2, bodyTop + 7)
+    ctx.fillText(`${this.files.length} ${this.language === 'ru' ? 'ФАЙЛОВ' : 'FILES'}`, fileX + fileWidth - 2, bodyTop + 7)
     ctx.textAlign = 'left'
 
     const listTop = bodyTop + lineHeight * 1.7
     const listBottom = bodyBottom - 5
     const visibleFiles = Math.max(1, Math.floor((listBottom - listTop) / lineHeight))
     if (this.selectedFileIndex < this.fileScrollTop) this.fileScrollTop = this.selectedFileIndex
-    if (this.selectedFileIndex >= this.fileScrollTop + visibleFiles) this.fileScrollTop = this.selectedFileIndex - visibleFiles + 1
+    if (this.selectedFileIndex >= this.fileScrollTop + visibleFiles) {
+      this.fileScrollTop = this.selectedFileIndex - visibleFiles + 1
+    }
     this.fileScrollTop = Math.max(0, Math.min(this.fileScrollTop, Math.max(0, this.files.length - visibleFiles)))
+
+    this.pointerLayout = {
+      width,
+      height,
+      filePane: {
+        x: fileX - 3,
+        y: bodyTop,
+        width: fileWidth + 4,
+        height: bodyHeight,
+      },
+      editorPane: {
+        x: codeX - 4,
+        y: bodyTop,
+        width: codeWidth + 4,
+        height: bodyHeight,
+      },
+      fileList: {
+        x: fileX,
+        y: listTop,
+        width: fileWidth - 2,
+        height: listBottom - listTop,
+        lineHeight,
+        firstIndex: this.fileScrollTop,
+        visibleRows: visibleFiles,
+      },
+    }
 
     ctx.font = tinyFont
     for (let row = 0; row < visibleFiles; row += 1) {
@@ -198,10 +254,15 @@ export class CodeEditorWindow implements GameWindow {
       ctx.textAlign = 'left'
     }
 
-    // Active path header and Vim-like source pane.
+    // Active path and source pane.
     ctx.font = boldFont
     ctx.fillStyle = '#ffe15a'
-    ctx.fillText(this.currentPath || (this.language === 'ru' ? '[ФАЙЛ НЕ ВЫБРАН]' : '[NO FILE SELECTED]'), codeX + 3, bodyTop + 5, codeWidth - 8)
+    ctx.fillText(
+      this.currentPath || (this.language === 'ru' ? '[ФАЙЛ НЕ ВЫБРАН]' : '[NO FILE SELECTED]'),
+      codeX + 3,
+      bodyTop + 5,
+      codeWidth - 8,
+    )
     ctx.font = tinyFont
     ctx.textAlign = 'right'
     ctx.fillStyle = this.isDirty() ? '#ff9861' : '#d8a733'
@@ -211,9 +272,12 @@ export class CodeEditorWindow implements GameWindow {
     const codeTop = bodyTop + lineHeight * 1.7
     const codeBottom = bodyBottom - 5
     const codeRows = Math.max(1, Math.floor((codeBottom - codeTop) / lineHeight))
-    const gutterWidth = this.showLineNumbers ? Math.max(28, ctx.measureText(String(this.buffer.length)).width + 14) : 0
+    const gutterWidth = this.showLineNumbers
+      ? Math.max(28, ctx.measureText(String(this.buffer.length)).width + 14)
+      : 0
     const textX = codeX + 8 + gutterWidth
     const maxTextWidth = Math.max(20, width - margin - textX)
+
     if (this.cursorRow < this.scrollTop) this.scrollTop = this.cursorRow
     if (this.cursorRow >= this.scrollTop + codeRows) this.scrollTop = this.cursorRow - codeRows + 1
     this.scrollTop = Math.max(0, Math.min(this.scrollTop, Math.max(0, this.buffer.length - codeRows)))
@@ -224,10 +288,12 @@ export class CodeEditorWindow implements GameWindow {
       if (line === undefined) break
       const y = codeTop + row * lineHeight
       const isCurrent = lineIndex === this.cursorRow && this.activePane === 'editor'
+
       if (isCurrent) {
         ctx.fillStyle = '#4a2c00'
         ctx.fillRect(codeX + 2, y - 1, codeWidth - 8, lineHeight)
       }
+
       if (this.showLineNumbers) {
         ctx.font = tinyFont
         ctx.textAlign = 'right'
@@ -235,7 +301,9 @@ export class CodeEditorWindow implements GameWindow {
         ctx.fillText(String(lineIndex + 1).padStart(3, ' '), codeX + 4 + gutterWidth - 4, y)
         ctx.textAlign = 'left'
       }
+
       this.drawCodeLine(ctx, line, textX, y, maxTextWidth, normalFont, tinyFont)
+
       if (isCurrent && this.mode === 'NORMAL' && this.blinkClock % 1.1 < 0.65) {
         const before = line.slice(0, this.cursorCol)
         const cursorX = textX + Math.min(maxTextWidth - fontSize, ctx.measureText(before).width)
@@ -252,33 +320,60 @@ export class CodeEditorWindow implements GameWindow {
       }
     }
 
-    // Bottom panels follow the reference screenshot: file metadata on the left,
-    // editor state / command prompt on the right.
+    // One large, continuous help panel. File state and editor status occupy
+    // compact rows at the top; the rest of the panel is dedicated to readable
+    // keyboard instructions. No nested cards, columns, or boxed help items.
     const footerY = bodyBottom + 8
     const footerW = width - margin * 2
-    const footerLeftW = Math.max(145, Math.min(footerW * 0.31, footerW - 180))
-    ctx.fillStyle = '#4b2600'
-    ctx.fillRect(margin, footerY, footerLeftW, footerHeight - 5)
-    ctx.strokeStyle = '#b87b00'
-    ctx.strokeRect(margin + 0.5, footerY + 0.5, footerLeftW - 1, footerHeight - 6)
-    ctx.fillStyle = '#e8b52d'
-    ctx.font = tinyFont
-    ctx.fillText(this.language === 'ru' ? 'ВЫБРАННЫЙ ФАЙЛ' : 'SELECTED FILE', margin + 8, footerY + 5)
-    ctx.fillStyle = '#ffdf62'
-    ctx.fillText(this.fitText(ctx, this.basename(this.currentPath), footerLeftW - 16), margin + 8, footerY + lineHeight + 3)
-    ctx.fillStyle = '#bb8a22'
-    ctx.fillText(this.isDirty() ? (this.language === 'ru' ? 'ИЗМЕНЁН • НЕ СОХРАНЁН' : 'MODIFIED • UNSAVED') : (this.language === 'ru' ? 'ФАЙЛ СОХРАНЁН' : 'FILE SAVED'), margin + 8, footerY + lineHeight * 2 + 1)
+    const footerH = footerHeight - 5
 
-    const rightFooterX = margin + footerLeftW + 7
-    const rightFooterW = width - margin - rightFooterX
     ctx.fillStyle = '#351a00'
-    ctx.fillRect(rightFooterX, footerY, rightFooterW, footerHeight - 5)
+    ctx.fillRect(margin, footerY, footerW, footerH)
     ctx.strokeStyle = '#b87b00'
-    ctx.strokeRect(rightFooterX + 0.5, footerY + 0.5, rightFooterW - 1, footerHeight - 6)
+    ctx.lineWidth = 1
+    ctx.strokeRect(margin + 0.5, footerY + 0.5, footerW - 1, footerH - 1)
+
+    const innerX = margin + 10
+    const innerW = Math.max(1, footerW - 20)
     ctx.font = tinyFont
-    ctx.fillStyle = this.mode === 'INSERT' ? '#afff55' : this.mode === 'COMMAND' || this.mode === 'SEARCH' ? '#7de5ff' : '#ffe064'
-    const modeLabel = this.mode === 'INSERT' ? '-- INSERT --' : this.mode === 'COMMAND' ? 'COMMAND' : this.mode === 'SEARCH' ? 'SEARCH' : '-- NORMAL --'
-    ctx.fillText(`${modeLabel}   ${this.cursorRow + 1}:${this.cursorCol + 1}   ${this.language === 'ru' ? 'СТРОК' : 'LINES'} ${this.buffer.length}`, rightFooterX + 8, footerY + 5)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+
+    const currentFileLabel = this.language === 'ru' ? 'ФАЙЛ:' : 'FILE:'
+    const currentFileName = this.basename(this.currentPath) || (this.language === 'ru' ? 'НЕ ВЫБРАН' : 'NONE SELECTED')
+    ctx.fillStyle = '#e8b52d'
+    ctx.fillText(currentFileLabel, innerX, footerY + 7)
+    const fileLabelWidth = ctx.measureText(`${currentFileLabel} `).width
+    ctx.fillStyle = '#ffdf62'
+    ctx.fillText(this.fitText(ctx, currentFileName, Math.max(1, innerW - fileLabelWidth - 190)), innerX + fileLabelWidth, footerY + 7)
+
+    ctx.textAlign = 'right'
+    ctx.fillStyle = this.isDirty() ? '#ff9861' : '#bbd66b'
+    ctx.fillText(
+      this.isDirty()
+        ? (this.language === 'ru' ? 'ИЗМЕНЁН — НЕ СОХРАНЁН' : 'MODIFIED — UNSAVED')
+        : (this.language === 'ru' ? 'ФАЙЛ СОХРАНЁН' : 'FILE SAVED'),
+      margin + footerW - 10,
+      footerY + 7,
+    )
+    ctx.textAlign = 'left'
+
+    const modeLabel = this.mode === 'INSERT'
+      ? '-- INSERT --'
+      : this.mode === 'COMMAND'
+        ? '-- COMMAND --'
+        : this.mode === 'SEARCH'
+          ? '-- SEARCH --'
+          : '-- NORMAL --'
+    const modeColor = this.mode === 'INSERT'
+      ? '#afff55'
+      : this.mode === 'COMMAND' || this.mode === 'SEARCH'
+        ? '#7de5ff'
+        : '#ffe064'
+    const statusY = footerY + lineHeight + 5
+    ctx.fillStyle = modeColor
+    const modeText = `${modeLabel}   ${this.cursorRow + 1}:${this.cursorCol + 1}   ${this.language === 'ru' ? 'СТРОК' : 'LINES'}: ${this.buffer.length}`
+    ctx.fillText(this.fitText(ctx, modeText, innerW * 0.48), innerX, statusY)
 
     const promptText = this.mode === 'COMMAND'
       ? `:${this.commandLine}`
@@ -286,14 +381,191 @@ export class CodeEditorWindow implements GameWindow {
         ? `/${this.commandLine}`
         : this.message
     ctx.fillStyle = this.messageIsError ? '#ff805b' : '#f0bb35'
-    ctx.fillText(this.fitText(ctx, promptText, rightFooterW - 16), rightFooterX + 8, footerY + lineHeight + 3)
-    ctx.fillStyle = '#af8425'
-    const keysHint = this.language === 'ru'
-      ? 'i: ввод   Esc: режим   :w: сохранить   :q: выход   :check: проверить'
-      : 'i: insert   Esc: normal   :w: save   :q: quit   :check: validate'
-    ctx.fillText(this.fitText(ctx, keysHint, rightFooterW - 16), rightFooterX + 8, footerY + lineHeight * 2 + 1)
+    const promptX = innerX + Math.min(innerW * 0.50, ctx.measureText(modeText).width + 18)
+    ctx.fillText(this.fitText(ctx, promptText, Math.max(1, margin + footerW - 10 - promptX)), promptX, statusY)
+
+    const dividerY = footerY + lineHeight * 2 + 8
+    ctx.strokeStyle = '#76500f'
+    ctx.beginPath()
+    ctx.moveTo(innerX, dividerY)
+    ctx.lineTo(innerX + innerW, dividerY)
+    ctx.stroke()
+
+    const instructions = this.language === 'ru'
+      ? [
+          { title: 'NORMAL', detail: 'Стрелки или h/j/k/l — перемещение; i/a — ввод; o/O — новая строка; x — удалить символ; dd — удалить строку.' },
+          { title: 'ВВОД', detail: 'Печатайте текст; Enter — новая строка; Backspace — удалить символ; Esc — вернуться в NORMAL.' },
+          { title: 'КОМАНДЫ', detail: ':w — сохранить; :q — выйти; :wq — сохранить и выйти; :q! — выйти без сохранения.' },
+          { title: 'ФАЙЛЫ', detail: 'Щелчок — выбрать; двойной щелчок — открыть; Tab — переключить панель; в списке файлов ↑/↓ и Enter.' },
+          { title: 'ПОИСК И ОТМЕНА', detail: '/текст — найти; n — следующее совпадение; u — отменить изменение; gg/G — начало/конец файла.' },
+          { title: 'ПРОВЕРКА И СПРАВКА', detail: ':check — проверить программу; :set number — номера строк; ? или :help — справка.' },
+        ]
+      : [
+          { title: 'NORMAL', detail: 'Arrows or h/j/k/l — move; i/a — insert; o/O — new line; x — delete character; dd — delete line.' },
+          { title: 'INSERT', detail: 'Type text; Enter — new line; Backspace — delete character; Esc — return to NORMAL.' },
+          { title: 'COMMANDS', detail: ':w — save; :q — quit; :wq — save and quit; :q! — quit without saving.' },
+          { title: 'FILES', detail: 'Click — select; double-click — open; Tab — switch pane; in the file list use Up/Down and Enter.' },
+          { title: 'SEARCH / UNDO', detail: '/text — search; n — next match; u — undo; gg/G — start/end of file.' },
+          { title: 'CHECK / HELP', detail: ':check — validate program; :set number — line numbers; ? or :help — help.' },
+        ]
+
+    // Wrap each help paragraph against the full width of the one large panel.
+    // Keep a modest indent on continuation lines so the category labels remain clear.
+    const wrapWords = (text: string, maxWidth: number): string[] => {
+      const words = text.split(/\s+/).filter(Boolean)
+      const lines: string[] = []
+      let current = ''
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word
+        if (ctx.measureText(candidate).width <= maxWidth) {
+          current = candidate
+        } else {
+          if (current) lines.push(current)
+          current = ctx.measureText(word).width <= maxWidth ? word : this.fitText(ctx, word, maxWidth)
+        }
+      }
+      if (current) lines.push(current)
+      return lines.length ? lines : ['']
+    }
+
+    const helpTop = dividerY + 7
+    const helpBottom = footerY + footerH - 8
+    const helpLineHeight = Math.max(10, lineHeight - 2)
+    const continuationIndent = Math.min(16, innerW * 0.04)
+    let helpY = helpTop
+
+    ctx.font = tinyFont
+    for (const item of instructions) {
+      if (helpY + helpLineHeight > helpBottom) break
+
+      const label = `${item.title}: `
+      const labelWidth = ctx.measureText(label).width
+      const firstLineWidth = Math.max(1, innerW - labelWidth)
+      const detailLines = wrapWords(item.detail, firstLineWidth)
+
+      ctx.fillStyle = '#ffe064'
+      ctx.fillText(label, innerX, helpY)
+      ctx.fillStyle = '#c39a37'
+      ctx.fillText(detailLines[0] ?? '', innerX + labelWidth, helpY, firstLineWidth)
+      helpY += helpLineHeight
+
+      for (const continuation of detailLines.slice(1)) {
+        if (helpY + helpLineHeight > helpBottom) break
+        ctx.fillStyle = '#c39a37'
+        ctx.fillText(continuation, innerX + continuationIndent, helpY, Math.max(1, innerW - continuationIndent))
+        helpY += helpLineHeight
+      }
+    }
 
     ctx.restore()
+  }
+
+  private attachPointerInput(canvas: HTMLCanvasElement): void {
+    if (this.pointerCanvas === canvas && this.pointerListenersAttached) return
+    this.detachPointerInput()
+    this.pointerCanvas = canvas
+    canvas.addEventListener('pointerdown', this.onCanvasPointerDown)
+    canvas.addEventListener('dblclick', this.onCanvasDoubleClick)
+    this.pointerListenersAttached = true
+  }
+
+  private detachPointerInput(): void {
+    if (!this.pointerCanvas || !this.pointerListenersAttached) return
+    this.pointerCanvas.removeEventListener('pointerdown', this.onCanvasPointerDown)
+    this.pointerCanvas.removeEventListener('dblclick', this.onCanvasDoubleClick)
+    this.pointerListenersAttached = false
+    this.pointerCanvas = null
+  }
+
+  private handleCanvasPointer(event: MouseEvent, openFile: boolean): void {
+    if (event.button !== 0) return
+    const canvas = this.pointerCanvas
+    const layout = this.pointerLayout
+    if (!canvas || !layout) return
+
+    const bounds = canvas.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return
+
+    const x = (event.clientX - bounds.left) * (layout.width / bounds.width)
+    const y = (event.clientY - bounds.top) * (layout.height / bounds.height)
+    const contains = (rect: HitRect): boolean =>
+      x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+
+    if (contains(layout.filePane)) {
+      this.activePane = 'files'
+      if (!contains(layout.fileList)) return
+
+      const row = Math.floor((y - layout.fileList.y) / layout.fileList.lineHeight)
+      if (row < 0 || row >= layout.fileList.visibleRows) return
+
+      const index = layout.fileList.firstIndex + row
+      const path = this.files[index]
+      if (!path) return
+
+      this.selectedFileIndex = index
+      if (openFile) {
+        this.openSelectedFile()
+      } else {
+        this.setMessage(
+          this.language === 'ru'
+            ? `ВЫБРАН: ${this.basename(path)} — ENTER ИЛИ ДВОЙНОЙ ЩЕЛЧОК, ЧТОБЫ ОТКРЫТЬ`
+            : `SELECTED: ${this.basename(path)} — PRESS ENTER OR DOUBLE-CLICK TO OPEN`,
+        )
+      }
+      return
+    }
+
+    if (contains(layout.editorPane)) this.activePane = 'editor'
+  }
+
+  /**
+   * Vim shortcuts in NORMAL mode use physical QWERTY key positions so commands
+   * such as dd, gg, hjkl and :w also work while a non-Latin keyboard layout is active.
+   * INSERT, COMMAND and SEARCH modes continue to use KeyboardEvent.key and therefore
+   * preserve the user's actual typed characters.
+   */
+  private normalizeNormalModeKey(event: InputKeyEvent): string {
+    const { code, key, shiftKey } = event
+
+    // Preserve Latin key values as delivered by the browser, including Caps Lock.
+    if (/^Key[A-Z]$/.test(code) && /^[a-zA-Z]$/.test(key)) {
+      return key
+    }
+
+    // Convert physical letter keys to their Latin Vim command equivalents.
+    if (/^Key[A-Z]$/.test(code)) {
+      const letter = code.slice(3).toLowerCase()
+      return shiftKey ? letter.toUpperCase() : letter
+    }
+
+    const digitMatch = /^Digit([0-9])$/.exec(code)
+    if (digitMatch) {
+      const digit = digitMatch[1]!
+      const shifted: Record<string, string> = {
+        '0': ')', '1': '!', '2': '@', '3': '#', '4': '$',
+        '5': '%', '6': '^', '7': '&', '8': '*', '9': '(',
+      }
+      return shiftKey ? (shifted[digit] ?? digit) : digit
+    }
+
+    const punctuation: Record<string, [string, string]> = {
+      Backquote: ['`', '~'],
+      Minus: ['-', '_'],
+      Equal: ['=', '+'],
+      BracketLeft: ['[', '{'],
+      BracketRight: [']', '}'],
+      Backslash: ['\\', '|'],
+      Semicolon: [';', ':'],
+      Quote: ["'", '"'],
+      Comma: [',', '<'],
+      Period: ['.', '>'],
+      Slash: ['/', '?'],
+    }
+
+    const pair = punctuation[code]
+    if (pair) return shiftKey ? pair[1] : pair[0]
+
+    return key
   }
 
   private handleNormalKey(key: string): void {
@@ -301,7 +573,8 @@ export class CodeEditorWindow implements GameWindow {
       if (key === 'ArrowUp' || key.toLowerCase() === 'k') this.moveFileSelection(-1)
       else if (key === 'ArrowDown' || key.toLowerCase() === 'j') this.moveFileSelection(1)
       else if (key === 'Enter') this.openSelectedFile()
-      else if (key === 'Tab' || key === 'ArrowRight') this.activePane = 'editor'
+      else if (key === 'Tab' || key === 'ArrowRight' || key.toLowerCase() === 'l') this.activePane = 'editor'
+      else if (key === 'ArrowLeft' || key.toLowerCase() === 'h') this.activePane = 'editor'
       else if (key === 'Escape') this.exitEditor()
       else if (key === ':') this.startCommandMode()
       return
@@ -309,12 +582,12 @@ export class CodeEditorWindow implements GameWindow {
 
     if (key === 'Tab') {
       this.activePane = 'files'
-      this.setMessage(this.language === 'ru' ? 'ПАНЕЛЬ ФАЙЛОВ: ↑/↓ ВЫБОР, ENTER ОТКРЫТЬ' : 'FILE PANE: ↑/↓ SELECT, ENTER OPEN')
+      this.setMessage(this.language === 'ru' ? 'ПАНЕЛЬ ФАЙЛОВ: ↑/↓, ENTER' : 'FILE PANE: ↑/↓, ENTER')
       return
     }
     if (key === 'Escape') {
       this.pendingNormalKey = ''
-      this.setMessage('NORMAL')
+      this.setMessage('-- NORMAL --')
       return
     }
 
@@ -377,9 +650,9 @@ export class CodeEditorWindow implements GameWindow {
     if (key === 'Home') { this.cursorCol = 0; return }
     if (key === 'End') { this.cursorCol = (this.buffer[this.cursorRow] ?? '').length; return }
 
-    this.pushUndo()
     const line = this.buffer[this.cursorRow] ?? ''
     if (key === 'Enter') {
+      this.pushUndo()
       const before = line.slice(0, this.cursorCol)
       const after = line.slice(this.cursorCol)
       this.buffer[this.cursorRow] = before
@@ -389,9 +662,11 @@ export class CodeEditorWindow implements GameWindow {
       this.setMessage('-- INSERT --')
     } else if (key === 'Backspace') {
       if (this.cursorCol > 0) {
+        this.pushUndo()
         this.buffer[this.cursorRow] = line.slice(0, this.cursorCol - 1) + line.slice(this.cursorCol)
         this.cursorCol -= 1
       } else if (this.cursorRow > 0) {
+        this.pushUndo()
         const previous = this.buffer[this.cursorRow - 1] ?? ''
         this.cursorCol = previous.length
         this.buffer[this.cursorRow - 1] = previous + line
@@ -399,16 +674,18 @@ export class CodeEditorWindow implements GameWindow {
         this.cursorRow -= 1
       }
     } else if (key === 'Tab') {
+      this.pushUndo()
       this.buffer[this.cursorRow] = line.slice(0, this.cursorCol) + '  ' + line.slice(this.cursorCol)
       this.cursorCol += 2
     } else if (key.length === 1) {
+      this.pushUndo()
       this.buffer[this.cursorRow] = line.slice(0, this.cursorCol) + key + line.slice(this.cursorCol)
       this.cursorCol += 1
     } else if (key === 'Delete') {
-      this.buffer[this.cursorRow] = line.slice(0, this.cursorCol) + line.slice(this.cursorCol + 1)
-    } else {
-      // Navigation keys must not create extra undo entries.
-      this.undoStack.pop()
+      if (this.cursorCol < line.length) {
+        this.pushUndo()
+        this.buffer[this.cursorRow] = line.slice(0, this.cursorCol) + line.slice(this.cursorCol + 1)
+      }
     }
   }
 
@@ -444,18 +721,17 @@ export class CodeEditorWindow implements GameWindow {
     this.lastCommand = raw
     const [command, ...rest] = raw.split(/\s+/)
     const argument = rest.join(' ').trim()
+
     switch ((command ?? '').toLowerCase()) {
-      case 'w':
-      case 'write': this.saveFile(); break
-      case 'q':
-      case 'quit':
-        if (this.isDirty()) this.setMessage(this.language === 'ru' ? 'НЕСОХРАНЁННЫЕ ИЗМЕНЕНИЯ — ИСПОЛЬЗУЙТЕ :wq ИЛИ :q!' : 'UNSAVED CHANGES — USE :wq OR :q!', true)
-        else this.exitEditor()
+      case 'w': case 'write': this.saveFile(); break
+      case 'q': case 'quit':
+        if (this.isDirty()) {
+          this.setMessage(this.language === 'ru' ? 'НЕСОХРАНЁННЫЕ ИЗМЕНЕНИЯ — ИСПОЛЬЗУЙТЕ :wq ИЛИ :q!' : 'UNSAVED CHANGES — USE :wq OR :q!', true)
+        } else this.exitEditor()
         break
       case 'q!': this.reloadCurrentFile(); this.exitEditor(); break
       case 'wq': if (this.saveFile()) this.exitEditor(); break
-      case 'e':
-      case 'edit':
+      case 'e': case 'edit':
         if (!argument) this.setMessage(this.language === 'ru' ? 'ФОРМАТ: :e <ПУТЬ>' : 'USAGE: :e <PATH>', true)
         else this.openFile(argument, false)
         break
@@ -475,8 +751,7 @@ export class CodeEditorWindow implements GameWindow {
       case 'check': this.validateProgram(); break
       case 'help': this.showHelp(); break
       case 'files': this.activePane = 'files'; this.setMessage(this.language === 'ru' ? 'ПАНЕЛЬ ФАЙЛОВ: ↑/↓, ENTER' : 'FILE PANE: ↑/↓, ENTER'); break
-      default:
-        this.setMessage(this.language === 'ru' ? `НЕИЗВЕСТНАЯ КОМАНДА :${command}` : `UNKNOWN COMMAND :${command}`, true)
+      default: this.setMessage(this.language === 'ru' ? `НЕИЗВЕСТНАЯ КОМАНДА :${command}` : `UNKNOWN COMMAND :${command}`, true)
     }
   }
 
@@ -490,6 +765,7 @@ export class CodeEditorWindow implements GameWindow {
       if (next) this.commandLine = next
       return
     }
+
     const pathPrefix = match[2] ?? ''
     const candidates = this.fileSystem.getPathCandidates(pathPrefix, false)
     const next = candidates.find((path) => path.toLowerCase().startsWith(pathPrefix.toLowerCase()) && path !== pathPrefix)
@@ -502,6 +778,7 @@ export class CodeEditorWindow implements GameWindow {
       this.setMessage(this.language === 'ru' ? 'ПРОВЕРКА ДОСТУПНА ДЛЯ ФАЙЛОВ .DRV И .SEQ' : 'CHECK IS AVAILABLE FOR .DRV AND .SEQ FILES', true)
       return
     }
+
     const text = this.buffer.join('\n').toUpperCase()
     const required = [
       'VERIFY_POWER(PWR-100, PDU-230)',
@@ -519,13 +796,14 @@ export class CodeEditorWindow implements GameWindow {
     const orderValid = positions.every((position, index) => index === 0 || position > positions[index - 1]!)
     const safetyFlagsValid = /CRC_CHECK\s*=\s*TRUE/.test(text) && /REQUIRE_COOLING\s*=\s*TRUE/.test(text)
     const valid = firstMissing < 0 && orderValid && safetyFlagsValid
+
     if (valid) {
       this.checkedBufferText = this.buffer.join('\n')
       this.setMessage(this.language === 'ru' ? 'CHECK OK: ПОСЛЕДОВАТЕЛЬНОСТЬ И БЛОКИРОВКИ КОРРЕКТНЫ. СОХРАНИТЕ :w' : 'CHECK OK: SEQUENCE AND INTERLOCKS VALID. SAVE WITH :w')
     } else {
       this.checkedBufferText = null
       const missing = firstMissing >= 0 ? required[firstMissing] : !orderValid ? 'SEQUENCE ORDER' : 'CRC_CHECK=true / REQUIRE_COOLING=true'
-      this.setMessage(this.language === 'ru' ? `CHECK FAILED: ${missing}` : `CHECK FAILED: ${missing}`, true)
+      this.setMessage(`CHECK FAILED: ${missing}`, true)
       this.onValidate?.(this.currentPath, false)
     }
   }
@@ -536,12 +814,15 @@ export class CodeEditorWindow implements GameWindow {
       this.setMessage(this.language === 'ru' ? 'ФОРМАТ ФАЙЛА ТОЛЬКО ДЛЯ ЧТЕНИЯ' : 'FILE FORMAT IS READ-ONLY', true)
       return false
     }
-    const success = this.fileSystem.write(this.currentPath, this.buffer.join('\n'))
+
+    const text = this.buffer.join('\n')
+    const success = this.fileSystem.write(this.currentPath, text)
     if (!success) {
       this.setMessage(this.language === 'ru' ? 'ОШИБКА СОХРАНЕНИЯ: ФАЙЛ НЕ НАЙДЕН' : 'SAVE ERROR: FILE NOT FOUND', true)
       return false
     }
-    this.savedText = this.buffer.join('\n')
+
+    this.savedText = text
     if (this.checkedBufferText && this.checkedBufferText === this.savedText) this.onValidate?.(this.currentPath, true)
     this.setMessage(this.language === 'ru' ? `СОХРАНЕНО: ${this.currentPath}` : `WRITTEN: ${this.currentPath}`)
     return true
@@ -554,6 +835,7 @@ export class CodeEditorWindow implements GameWindow {
       this.setMessage(this.language === 'ru' ? `ФАЙЛ НЕ НАЙДЕН: ${path}` : `FILE NOT FOUND: ${path}`, true)
       return
     }
+
     this.currentPath = path
     this.buffer = [...content]
     if (!this.buffer.length) this.buffer = ['']
@@ -579,6 +861,7 @@ export class CodeEditorWindow implements GameWindow {
     this.files = this.fileSystem.getPathCandidates('', false)
       .filter((path) => Boolean(this.fileSystem.read(path, this.language)))
       .sort((a, b) => a.localeCompare(b))
+
     if (this.files.length && !this.files.includes(this.currentPath)) {
       this.selectedFileIndex = Math.min(this.selectedFileIndex, this.files.length - 1)
     }
@@ -684,6 +967,7 @@ export class CodeEditorWindow implements GameWindow {
       this.setMessage(this.language === 'ru' ? 'ПУСТОЙ ПОИСК' : 'EMPTY SEARCH', true)
       return
     }
+
     this.searchQuery = query
     this.searchMatches = []
     const needle = query.toLowerCase()
@@ -707,17 +991,23 @@ export class CodeEditorWindow implements GameWindow {
       return
     }
     const startRow = this.cursorRow
-    const nextIndex = this.searchMatches.findIndex((match) => match.row > startRow || (match.row === startRow && match.col > this.cursorCol))
+    const nextIndex = this.searchMatches.findIndex(
+      (match) => match.row > startRow || (match.row === startRow && match.col > this.cursorCol),
+    )
     this.searchIndex = nextIndex >= 0 ? nextIndex : 0
     const match = this.searchMatches[this.searchIndex]!
     this.setCursor(match.row, match.col)
-    this.setMessage(this.language === 'ru' ? `ПОИСК ${this.searchIndex + 1}/${this.searchMatches.length}: ${this.searchQuery}` : `SEARCH ${this.searchIndex + 1}/${this.searchMatches.length}: ${this.searchQuery}`)
+    this.setMessage(this.language === 'ru'
+      ? `ПОИСК ${this.searchIndex + 1}/${this.searchMatches.length}: ${this.searchQuery}`
+      : `SEARCH ${this.searchIndex + 1}/${this.searchMatches.length}: ${this.searchQuery}`)
   }
 
   private startCommandMode(): void {
     this.mode = 'COMMAND'
     this.commandLine = ''
-    this.setMessage(this.language === 'ru' ? 'КОМАНДА: :w :q :wq :e <путь> :check :help' : 'COMMAND: :w :q :wq :e <path> :check :help')
+    this.setMessage(this.language === 'ru'
+      ? 'КОМАНДА: :w :q :wq :e <путь> :check :help'
+      : 'COMMAND: :w :q :wq :e <path> :check :help')
   }
 
   private showHelp(): void {
@@ -728,6 +1018,7 @@ export class CodeEditorWindow implements GameWindow {
 
   private exitEditor(): void {
     this.mode = 'NORMAL'
+    this.detachPointerInput()
     this.manager?.show(this.returnWindowId)
   }
 
@@ -767,7 +1058,14 @@ export class CodeEditorWindow implements GameWindow {
     return `${fitted}…`
   }
 
-  private drawPaneFrame(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, active: boolean): void {
+  private drawPaneFrame(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    active: boolean,
+  ): void {
     ctx.fillStyle = '#2d1600'
     ctx.fillRect(x, y, width, height)
     ctx.strokeStyle = active ? '#ffe33c' : '#8d5b00'
@@ -775,7 +1073,15 @@ export class CodeEditorWindow implements GameWindow {
     ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1)
   }
 
-  private drawCodeLine(ctx: CanvasRenderingContext2D, line: string, x: number, y: number, maxWidth: number, normalFont: string, tinyFont: string): void {
+  private drawCodeLine(
+    ctx: CanvasRenderingContext2D,
+    line: string,
+    x: number,
+    y: number,
+    maxWidth: number,
+    normalFont: string,
+    tinyFont: string,
+  ): void {
     ctx.font = normalFont
     const value = this.fitText(ctx, line, maxWidth)
     if (/^\s*#/.test(line) || /^\s*\/\//.test(line)) {
@@ -792,7 +1098,7 @@ export class CodeEditorWindow implements GameWindow {
       ctx.fillStyle = '#ffd264'
     }
     ctx.fillText(value, x, y, maxWidth)
-    // Keep a small distinct marker for malformed profile checksums in the source.
+
     if (/CRC_ACTUAL\s*=\s*INVALID/i.test(line)) {
       ctx.font = tinyFont
       ctx.fillStyle = '#ff6550'

@@ -108,8 +108,6 @@ export class UiWindow implements GameWindow {
   constructor(robotSystem: RobotSystem) {
     this.robotSystem = robotSystem
     this.schemeImage.src = `${import.meta.env.BASE_URL}robot_scheme/scheme_01.png`
-    const first = this.robotSystem.listComponents().findIndex((item) => toUiStatus(item.status) !== 'normal')
-    this.selectedIndex = Math.max(0, first)
   }
 
   setLanguage(language: GameLanguage): void {
@@ -125,10 +123,19 @@ export class UiWindow implements GameWindow {
       position: { x: 0, y: 0 },
       size: { width: 0, height: 0 },
     })
+
+    // Select the first visible component that needs attention, if there is one.
+    this.visibleComponents = this.getFilteredComponents()
+    const firstProblem = this.visibleComponents.findIndex(
+      (item) => toUiStatus(item.status) !== 'normal',
+    )
+    this.selectedIndex = firstProblem >= 0 ? firstProblem : (this.visibleComponents.length > 0 ? 0 : -1)
+    this.scrollTop = 0
+    this.message = ''
   }
 
   update(dt: number, input: Input): void {
-    // Accumulate history data points over time
+    // Accumulate history data points over time.
     this.historyTimer += dt
     if (this.historyTimer >= 0.15) {
       this.historyTimer = 0
@@ -186,10 +193,9 @@ export class UiWindow implements GameWindow {
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
-    // Clear the previous frame. Glow is intentionally drawn after clearing so it stays crisp.
     ctx.clearRect(0, 0, width, height)
-    // ctx.fillStyle = COLORS.background
-    // ctx.fillRect(0, 0, width, height)
+    ctx.fillStyle = COLORS.background
+    ctx.fillRect(0, 0, width, height)
     this.drawGrid(ctx, width, height)
 
     const margin = width < 560 ? 10 : width < 1000 ? 18 : 28
@@ -235,14 +241,25 @@ export class UiWindow implements GameWindow {
     this.drawRule(ctx, margin, ruleY, width - margin * 2)
 
     const contentY = ruleY + 8
-    const footerHeight = Math.max(4.4 * lineHeight + 8, 72)
-    const footerY = height - margin - footerHeight
+    const availableWidth = Math.max(0, width - margin * 2)
+    const compactFooter = width < 680
+    const hintHeight = lineHeight + 4
+    const detailsHeight = compactFooter
+      ? Math.max(4 * lineHeight + 14, 74)
+      : Math.max(4.4 * lineHeight + 8, 72)
+    const powerHeight = compactFooter
+      ? Math.max(2.5 * lineHeight + 12, 54)
+      : detailsHeight
+    const footerHeight = compactFooter
+      ? detailsHeight + 8 + powerHeight
+      : detailsHeight
+    const footerY = height - margin - hintHeight - footerHeight
     const mainHeight = Math.max(100, footerY - contentY - 9)
-    const availableWidth = width - margin * 2
     const showDiagram = width >= 780 && mainHeight >= 220
     const gap = showDiagram ? 12 : 0
     const diagramWidth = showDiagram ? Math.min(availableWidth * 0.39, 470) : 0
     const listWidth = Math.max(0, availableWidth - diagramWidth - gap)
+
     const mainRect: Rect = { x: margin, y: contentY, width: availableWidth, height: mainHeight }
     this.lastMainRect = mainRect
     this.visibleComponents = this.getFilteredComponents()
@@ -264,32 +281,89 @@ export class UiWindow implements GameWindow {
 
     const footerRect: Rect = { x: margin, y: footerY, width: availableWidth, height: footerHeight }
     this.lastFooterRect = footerRect
-    this.drawDetailsAndActions(ctx, footerRect, font, smallFont, lineHeight)
+
+    let detailsRect: Rect
+    let powerRect: Rect
+
+    if (compactFooter) {
+      // Narrow layout: details and power controls use their own stacked panels.
+      detailsRect = {
+        x: margin,
+        y: footerY,
+        width: availableWidth,
+        height: detailsHeight,
+      }
+      powerRect = {
+        x: margin,
+        y: footerY + detailsHeight + 8,
+        width: availableWidth,
+        height: powerHeight,
+      }
+    } else {
+      // Wide layout: the power panel is separate and positioned to the right.
+      const footerGap = 10
+      const powerWidth = Math.min(250, Math.max(190, Math.floor(availableWidth * 0.28)))
+      const detailsWidth = Math.max(0, availableWidth - powerWidth - footerGap)
+      detailsRect = {
+        x: margin,
+        y: footerY,
+        width: detailsWidth,
+        height: footerHeight,
+      }
+      powerRect = {
+        x: margin + detailsWidth + footerGap,
+        y: footerY,
+        width: powerWidth,
+        height: footerHeight,
+      }
+    }
+
+    this.drawDetailsAndActions(ctx, detailsRect, font, smallFont, lineHeight)
+    this.drawPowerPanel(ctx, powerRect, font, smallFont, lineHeight)
 
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
     const footerHelp = this.language === 'ru'
       ? '1–6: ЧАСТЬ ТЕЛА  ·  0: ВСЕ  ·  ↑/↓: КОМПОНЕНТ  ·  ENTER: ОТЛАДКА  ·  P: ПИТАНИЕ  ·  ESC: КОНСОЛЬ'
       : '1–6: BODY PART  ·  0: ALL  ·  ↑/↓: COMPONENT  ·  ENTER: DEBUG  ·  P: POWER  ·  ESC: CONSOLE'
-    ctx.fillText(this.fitText(ctx, footerHelp, width - margin * 2), margin, height - margin + 1)
+    ctx.fillText(this.fitText(ctx, footerHelp, width - margin * 2), margin, height - margin - lineHeight)
 
     ctx.restore()
   }
 
+  /**
+   * A component is shown if it is healthy or it has a registered service/minigame window.
+   * A missing window ID, or an ID not registered in WindowManager, does not qualify.
+   */
+  private hasRegisteredMinigame(component: RuntimeComponent): boolean {
+    if (!component.windowId || !this.manager) return false
+
+    try {
+      return Boolean(this.manager.get(component.windowId))
+    } catch {
+      return false
+    }
+  }
+
   private getFilteredComponents(): RuntimeComponent[] {
-    const all = this.robotSystem.listComponents()
-    if (this.selectedPart === 'ALL') return all
+    const components = this.robotSystem.listComponents().filter((component) => {
+      const isNormal = toUiStatus(component.status) === 'normal'
+      return isNormal || this.hasRegisteredMinigame(component)
+    })
+
+    if (this.selectedPart === 'ALL') return components
     const ids = PARTS.find((part) => part.id === this.selectedPart)?.componentIds ?? []
-    return all.filter((component) => ids.includes(component.id))
+    return components.filter((component) => ids.includes(component.id))
   }
 
   private getSelectedComponent(): RuntimeComponent | undefined {
+    if (this.selectedIndex < 0) return undefined
     return this.visibleComponents[this.selectedIndex]
   }
 
   private clampSelection(): void {
     if (this.visibleComponents.length === 0) {
-      this.selectedIndex = 0
+      this.selectedIndex = -1
       this.scrollTop = 0
       return
     }
@@ -299,22 +373,25 @@ export class UiWindow implements GameWindow {
   private selectPart(part: BodyPart): void {
     this.selectedPart = part
     this.scrollTop = 0
-    const ids = part === 'ALL' ? [] : (PARTS.find((item) => item.id === part)?.componentIds ?? [])
-    const all = this.robotSystem.listComponents()
-    const targetIndex = part === 'ALL'
-      ? all.findIndex((component) => toUiStatus(component.status) !== 'normal')
-      : all.findIndex((component) => ids.includes(component.id) && toUiStatus(component.status) !== 'normal')
     this.visibleComponents = this.getFilteredComponents()
-    const desiredId = targetIndex >= 0 ? all[targetIndex]?.id : this.visibleComponents[0]?.id
-    const filteredIndex = this.visibleComponents.findIndex((component) => component.id === desiredId)
-    this.selectedIndex = filteredIndex >= 0 ? filteredIndex : 0
+
+    const firstProblem = this.visibleComponents.findIndex(
+      (component) => toUiStatus(component.status) !== 'normal',
+    )
+    this.selectedIndex = firstProblem >= 0
+      ? firstProblem
+      : (this.visibleComponents.length > 0 ? 0 : -1)
     this.message = ''
   }
 
   private moveSelection(amount: number): void {
     const components = this.getFilteredComponents()
-    if (components.length === 0) return
-    this.selectedIndex = Math.max(0, Math.min(components.length - 1, this.selectedIndex + amount))
+    if (components.length === 0) {
+      this.selectedIndex = -1
+      return
+    }
+    const currentIndex = this.selectedIndex < 0 ? 0 : this.selectedIndex
+    this.selectedIndex = Math.max(0, Math.min(components.length - 1, currentIndex + amount))
     this.message = ''
   }
 
@@ -384,13 +461,14 @@ export class UiWindow implements GameWindow {
     ctx.textAlign = 'left'
 
     const rowsTop = tableHeaderY + lineHeight * 1.05
-    const graphsHeight = 72 // Taller graph container height
+    const graphPanelHeight = 72
     const graphsGap = 8
-    const rowsBottom = rect.y + rect.height - graphsHeight - graphsGap - 7
+    const graphsSectionHeight = graphPanelHeight * 2 + graphsGap
+    const rowsBottom = rect.y + rect.height - graphsSectionHeight - graphsGap - 7
     const rowHeight = Math.max(15, Math.min(lineHeight * 1.15, (rowsBottom - rowsTop) / 5.5))
     const visibleRows = Math.max(1, Math.floor((rowsBottom - rowsTop) / rowHeight))
 
-    if (this.selectedIndex < this.scrollTop) this.scrollTop = this.selectedIndex
+    if (this.selectedIndex >= 0 && this.selectedIndex < this.scrollTop) this.scrollTop = this.selectedIndex
     if (this.selectedIndex >= this.scrollTop + visibleRows) this.scrollTop = this.selectedIndex - visibleRows + 1
     this.scrollTop = Math.max(0, Math.min(this.scrollTop, Math.max(0, this.visibleComponents.length - visibleRows)))
 
@@ -435,14 +513,19 @@ export class UiWindow implements GameWindow {
       ctx.font = smallFont
       ctx.fillStyle = COLORS.dim
       ctx.textAlign = 'right'
-      ctx.fillText(`${this.scrollTop + 1}-${Math.min(this.scrollTop + visibleRows, this.visibleComponents.length)}/${this.visibleComponents.length}`, rect.x + rect.width - pad, rect.y + rect.height - graphsHeight - graphsGap - lineHeight * 0.8)
+      ctx.fillText(`${this.scrollTop + 1}-${Math.min(this.scrollTop + visibleRows, this.visibleComponents.length)}/${this.visibleComponents.length}`, rect.x + rect.width - pad, rect.y + rect.height - graphsSectionHeight - graphsGap - lineHeight * 0.8)
       ctx.textAlign = 'left'
     }
 
-    // --- Taller Continuous Line Graphs for Reactor Stability & Power Consumption ---
+    // Stack the power distribution graph above reactor stability, and place
+    // the recovery checklist in a column to their right.
     const graphsY = rowsBottom + graphsGap
-    const graphsWidth = rect.width - pad * 2
-    const halfWidth = Math.floor((graphsWidth - 8) / 2)
+    const graphsWidth = Math.max(0, rect.width - pad * 2)
+    const columnGap = 8
+    const graphColumnWidth = Math.floor((graphsWidth - columnGap) / 2)
+    const graphX = rect.x + pad
+    const checklistX = graphX + graphColumnWidth + columnGap
+    const checklistWidth = Math.max(0, graphsWidth - graphColumnWidth - columnGap)
 
     const reactorWin = this.manager?.get('reactor') as unknown as { solved?: boolean; computeStability?: () => number } | undefined
     const currentStability = typeof reactorWin?.computeStability === 'function'
@@ -455,15 +538,24 @@ export class UiWindow implements GameWindow {
       : (this.robotSystem.powerGridPuzzleSolved ? 0.9 : 0.3)
     const overCapacity = powerWin?.powerOverCapacity ?? (currentPower >= 1)
 
-    // Ensure fallback data if history is empty
     if (this.stabilityHistory.length === 0) this.stabilityHistory.push(currentStability)
     if (this.powerHistory.length === 0) this.powerHistory.push(currentPower)
 
-    const drawLineGraph = (subX: number, subY: number, subW: number, subH: number, title: string, history: number[], currentVal: number, isDanger: boolean) => {
+    const drawLineGraph = (
+      subX: number,
+      subY: number,
+      subW: number,
+      subH: number,
+      title: string,
+      history: number[],
+      currentVal: number,
+      isDanger: boolean,
+    ) => {
+      if (subW <= 0 || subH <= 0) return
       ctx.fillStyle = COLORS.panelAlt
       ctx.fillRect(subX, subY, subW, subH)
       ctx.strokeStyle = COLORS.border
-      ctx.strokeRect(subX + 0.5, subY + 0.5, subW - 1, subH - 1)
+      ctx.strokeRect(subX + 0.5, subY + 0.5, Math.max(0, subW - 1), Math.max(0, subH - 1))
 
       ctx.font = smallFont
       ctx.fillStyle = COLORS.dim
@@ -474,11 +566,11 @@ export class UiWindow implements GameWindow {
       ctx.fillText(`${Math.round(Math.max(0, Math.min(1, currentVal)) * 100)}%`, subX + subW - 6, subY + 4)
       ctx.textAlign = 'left'
 
-      // Taller graph plot area
       const plotX = subX + 6
       const plotY = subY + 18
       const plotW = subW - 12
       const plotH = subH - 22
+      if (plotW <= 0 || plotH <= 0) return
 
       ctx.save()
       ctx.beginPath()
@@ -493,11 +585,9 @@ export class UiWindow implements GameWindow {
       ctx.stroke()
 
       if (history.length >= 2) {
-        const strokeColor = isDanger ? COLORS.redBright : COLORS.green
-        ctx.strokeStyle = strokeColor
+        ctx.strokeStyle = isDanger ? COLORS.redBright : COLORS.green
         ctx.lineWidth = 1.5
         ctx.beginPath()
-
         const step = plotW / Math.max(1, history.length - 1)
         for (let i = 0; i < history.length; i += 1) {
           const val = Math.max(0, Math.min(1, history[i]))
@@ -511,11 +601,105 @@ export class UiWindow implements GameWindow {
       ctx.restore()
     }
 
+    const powerTitle = this.language === 'ru' ? 'РАСПРЕДЕЛЕНИЕ ЭНЕРГИИ' : 'POWER DISTRIBUTION'
     const stabTitle = this.language === 'ru' ? 'СТАБИЛЬНОСТЬ РЕАКТОРА' : 'REACTOR STABILITY'
-    const powerTitle = this.language === 'ru' ? 'ПОТРЕБЛЕНИЕ ЭНЕРГИИ' : 'POWER CONSUMPTION'
 
-    drawLineGraph(rect.x + pad, graphsY, halfWidth, graphsHeight, stabTitle, this.stabilityHistory, currentStability, currentStability < 0.5)
-    drawLineGraph(rect.x + pad + halfWidth + 8, graphsY, halfWidth, graphsHeight, powerTitle, this.powerHistory, currentPower, overCapacity)
+    // Power distribution is intentionally above reactor stability.
+    drawLineGraph(
+      graphX,
+      graphsY,
+      graphColumnWidth,
+      graphPanelHeight,
+      powerTitle,
+      this.powerHistory,
+      currentPower,
+      overCapacity,
+    )
+    drawLineGraph(
+      graphX,
+      graphsY + graphPanelHeight + graphsGap,
+      graphColumnWidth,
+      graphPanelHeight,
+      stabTitle,
+      this.stabilityHistory,
+      currentStability,
+      currentStability < 0.5,
+    )
+
+    this.drawRecoveryChecklist(
+      ctx,
+      {
+        x: checklistX,
+        y: graphsY,
+        width: checklistWidth,
+        height: graphsSectionHeight,
+      },
+      font,
+      lineHeight,
+    )
+  }
+
+  private drawRecoveryChecklist(
+    ctx: CanvasRenderingContext2D,
+    rect: Rect,
+    font: string,
+    lineHeight: number,
+  ): void {
+    this.drawPanel(ctx, rect, COLORS.panelAlt)
+
+    const pad = 7
+    const tasks = this.language === 'ru'
+      ? [
+          '1. Починить реактор',
+          '2. Подать питание на компоненты движения',
+          '3. Попробовать запустить',
+          '4. Починить память',
+          '5. Попробовать запустить',
+          '6. Починить алгоритм',
+          '7. Попробовать запустить',
+        ]
+      : [
+          '1. Repair the reactor',
+          '2. Power motion components',
+          '3. Attempt startup',
+          '4. Repair memory',
+          '5. Attempt startup',
+          '6. Repair the algorithm',
+          '7. Attempt startup',
+        ]
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(rect.x + 1, rect.y + 1, Math.max(0, rect.width - 2), Math.max(0, rect.height - 2))
+    ctx.clip()
+
+    ctx.font = font
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = COLORS.text
+    const heading = this.language === 'ru' ? 'СДЕЛАТЬ:' : 'TODO:'
+    ctx.fillText(this.fitText(ctx, heading, rect.width - pad * 2), rect.x + pad, rect.y + 6)
+
+    const contentWidth = Math.max(1, rect.width - pad * 2)
+    const longestTask = Math.max(...tasks.map((task) => task.length))
+    // Keep every task visible even when the component registry becomes narrow.
+    const taskFontSize = Math.max(5, Math.min(12, contentWidth / (longestTask * 0.62)))
+    ctx.font = `${taskFontSize}px "${FONT_FAMILY}", monospace`
+    ctx.fillStyle = COLORS.bright
+
+    const titleHeight = Math.max(14, lineHeight * 0.95)
+    const taskAreaHeight = Math.max(0, rect.height - titleHeight - 10)
+    const taskLineHeight = Math.min(
+      Math.max(taskFontSize + 2, 8),
+      taskAreaHeight / tasks.length,
+    )
+
+    tasks.forEach((task, index) => {
+      const y = rect.y + titleHeight + index * taskLineHeight
+      ctx.fillText(task, rect.x + pad, y, contentWidth)
+    })
+
+    ctx.restore()
   }
 
   private drawBodyDiagram(ctx: CanvasRenderingContext2D, rect: Rect, font: string, smallFont: string, lineHeight: number): void {
@@ -579,7 +763,7 @@ export class UiWindow implements GameWindow {
         ctx.strokeRect(hit.x + 1, hit.y + 1, Math.max(1, hit.width - 2), Math.max(1, hit.height - 2))
         ctx.restore()
       }
-      // Small component tags are clipped to each body region to avoid crossing adjacent parts.
+      // Clip labels to their region so they don't cross adjacent body parts.
       ctx.save()
       ctx.beginPath()
       ctx.rect(hit.x, hit.y, hit.width, hit.height)
@@ -628,7 +812,8 @@ export class UiWindow implements GameWindow {
     ctx.shadowBlur = 5
     ctx.beginPath()
     ctx.ellipse(cx, headY + rect.height * 0.05, rect.width * 0.14, rect.height * 0.07, 0, 0, Math.PI * 2)
-    ctx.fill(); ctx.stroke()
+    ctx.fill()
+    ctx.stroke()
     ctx.fillRect(cx - torsoW / 2, torsoY, torsoW, torsoH)
     ctx.strokeRect(cx - torsoW / 2, torsoY, torsoW, torsoH)
     ctx.beginPath()
@@ -654,62 +839,114 @@ export class UiWindow implements GameWindow {
     return 'ONLINE'
   }
 
-  private drawDetailsAndActions(ctx: CanvasRenderingContext2D, rect: Rect, font: string, smallFont: string, lineHeight: number): void {
+  private drawDetailsAndActions(
+    ctx: CanvasRenderingContext2D,
+    rect: Rect,
+    font: string,
+    smallFont: string,
+    lineHeight: number,
+  ): void {
     this.drawPanel(ctx, rect, COLORS.panelAlt)
+
     const pad = 9
     const component = this.getSelectedComponent()
     const buttonHeight = Math.max(22, Math.min(lineHeight * 1.3, rect.height * 0.30))
     const buttonY = rect.y + rect.height - buttonHeight - 6
-    const buttonGap = 8
-    const innerButtonWidth = Math.max(0, rect.width - pad * 2 - buttonGap)
-    // Derive both widths from the same available region so buttons never overlap,
-    // even in a narrow browser window.
-    const debugWidth = Math.floor(innerButtonWidth * 0.45)
-    const powerWidth = innerButtonWidth - debugWidth
     const contentTop = rect.y + 6
 
-    if (component) {
-      ctx.font = font
-      ctx.fillStyle = COLORS.bright
-      const title = `${component.id} — ${component.name}`
-      ctx.fillText(this.fitText(ctx, title, rect.width - pad * 2 - 140), rect.x + pad, contentTop)
-      ctx.textAlign = 'right'
-      ctx.fillStyle = statusColor(component.status)
-      ctx.fillText(statusLabel(component.status, this.language), rect.x + rect.width - pad, contentTop)
-      ctx.textAlign = 'left'
+    // Clear stale hit area: the debug button is only clickable while it is visible.
+    this.openButtonRect = null
 
-      ctx.font = smallFont
-      ctx.fillStyle = this.message ? COLORS.yellow : COLORS.text
-      const fault = this.message || component.fault || (this.language === 'ru' ? 'Активных ошибок нет.' : 'No active fault.')
-      ctx.fillText(this.fitText(ctx, fault, rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 1.15)
-      ctx.fillStyle = COLORS.dim
-      const recommendation = component.recommendation || (this.language === 'ru' ? 'Рекомендаций нет.' : 'No recommendation.')
-      ctx.fillText(this.fitText(ctx, recommendation, rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 2.05)
-    } else {
+    if (!component) {
       ctx.font = font
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
       ctx.fillStyle = COLORS.text
-      ctx.fillText(this.language === 'ru' ? 'КОМПОНЕНТ НЕ ВЫБРАН' : 'NO COMPONENT SELECTED', rect.x + pad, contentTop)
+      ctx.fillText(
+        this.language === 'ru' ? 'КОМПОНЕНТ НЕ ВЫБРАН' : 'NO COMPONENT SELECTED',
+        rect.x + pad,
+        contentTop,
+      )
+      return
     }
 
-    const leftButton: Rect = { x: rect.x + pad, y: buttonY, width: debugWidth, height: buttonHeight }
+    ctx.font = font
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = COLORS.bright
+    const title = `${component.id} — ${component.name}`
+    ctx.fillText(this.fitText(ctx, title, rect.width - pad * 2 - 140), rect.x + pad, contentTop)
+
+    ctx.textAlign = 'right'
+    ctx.fillStyle = statusColor(component.status)
+    ctx.fillText(statusLabel(component.status, this.language), rect.x + rect.width - pad, contentTop)
+    ctx.textAlign = 'left'
+
+    ctx.font = smallFont
+    ctx.fillStyle = this.message ? COLORS.yellow : COLORS.text
+    const fault = this.message || component.fault || (this.language === 'ru' ? 'Активных ошибок нет.' : 'No active fault.')
+    ctx.fillText(this.fitText(ctx, fault, rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 1.15)
+
+    ctx.fillStyle = COLORS.dim
+    const recommendation = component.recommendation || (this.language === 'ru' ? 'Рекомендаций нет.' : 'No recommendation.')
+    ctx.fillText(this.fitText(ctx, recommendation, rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 2.05)
+
+    // Show debug action only for components that are not healthy.
+    // Keep the hit area empty when hidden so it cannot be clicked invisibly.
+    if (toUiStatus(component.status) !== 'normal') {
+      const debugButton: Rect = {
+        x: rect.x + pad,
+        y: buttonY,
+        width: Math.max(0, rect.width - pad * 2),
+        height: buttonHeight,
+      }
+      this.openButtonRect = debugButton
+
+      this.drawButton(
+        ctx,
+        debugButton,
+        this.language === 'ru' ? 'ЗАПУСТИТЬ ОТЛАДКУ' : 'OPEN DEBUG',
+        COLORS.redDark,
+        COLORS.redBright,
+        true,
+        smallFont,
+      )
+    }
+  }
+
+  private drawPowerPanel(
+    ctx: CanvasRenderingContext2D,
+    rect: Rect,
+    font: string,
+    smallFont: string,
+    lineHeight: number,
+  ): void {
+    this.drawPanel(ctx, rect, COLORS.panelAlt)
+    const pad = 9
+
+    ctx.font = font
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = COLORS.text
+    ctx.fillText(
+      this.fitText(
+        ctx,
+        this.language === 'ru' ? 'УПРАВЛЕНИЕ ПИТАНИЕМ' : 'POWER DISTRIBUTION',
+        rect.width - pad * 2,
+      ),
+      rect.x + pad,
+      rect.y + 7,
+    )
+
+    const buttonHeight = Math.max(22, Math.min(lineHeight * 1.3, rect.height - lineHeight * 1.7 - 14))
     const powerButton: Rect = {
-      x: leftButton.x + leftButton.width + buttonGap,
-      y: buttonY,
-      width: powerWidth,
+      x: rect.x + pad,
+      y: rect.y + rect.height - buttonHeight - 6,
+      width: Math.max(0, rect.width - pad * 2),
       height: buttonHeight,
     }
-    this.openButtonRect = leftButton
-    this.powerButtonRect = powerButton
 
-    this.drawButton(
-      ctx,
-      leftButton,
-      this.language === 'ru' ? 'ЗАПУСТИТЬ ОТЛАДКУ' : 'OPEN DEBUG',
-      COLORS.redDark,
-      COLORS.redBright,
-      true,
-      smallFont,
-    )
+    this.powerButtonRect = powerButton
     this.drawButton(
       ctx,
       powerButton,
@@ -722,6 +959,7 @@ export class UiWindow implements GameWindow {
   }
 
   private drawButton(ctx: CanvasRenderingContext2D, rect: Rect, label: string, fill: string, border: string, glow: boolean, font: string): void {
+    if (rect.width <= 0 || rect.height <= 0) return
     ctx.save()
     ctx.fillStyle = fill
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
@@ -731,13 +969,32 @@ export class UiWindow implements GameWindow {
       ctx.shadowColor = 'rgba(255, 52, 72, 0.6)'
       ctx.shadowBlur = 10
     }
-    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1)
+    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, Math.max(0, rect.width - 1), Math.max(0, rect.height - 1))
     ctx.shadowBlur = 0
     ctx.font = font
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = COLORS.bright
-    ctx.fillText(this.fitText(ctx, label, rect.width - 10), rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width - 8)
+
+    // Keep the complete button label visible. If it is too wide, reduce the
+    // font size instead of truncating it with fitText(...).
+    const maxTextWidth = Math.max(0, rect.width - 12)
+    const measuredTextWidth = ctx.measureText(label).width
+    const fontSizeMatch = font.match(/(\d+(?:\.\d+)?)px/)
+    if (measuredTextWidth > maxTextWidth && maxTextWidth > 0 && fontSizeMatch) {
+      const currentFontSize = Number(fontSizeMatch[1])
+      const fittedFontSize = Math.max(7, currentFontSize * maxTextWidth / measuredTextWidth)
+      ctx.font = font.replace(fontSizeMatch[0], `${fittedFontSize.toFixed(2)}px`)
+    }
+
+    // Canvas applies horizontal scaling only as a last resort for very narrow
+    // buttons; the full label is still drawn and never replaced by an ellipsis.
+    ctx.fillText(
+      label,
+      rect.x + rect.width / 2,
+      rect.y + rect.height / 2,
+      maxTextWidth,
+    )
     ctx.restore()
   }
 
@@ -776,8 +1033,8 @@ export class UiWindow implements GameWindow {
       return
     }
     try {
-      // Check registration first so future analyzer/vision/cooling panels do not crash the UI.
-      this.manager?.get(component.windowId)
+      const target = this.manager?.get(component.windowId)
+      if (!target) throw new Error(`Window "${component.windowId}" is not registered`)
       this.manager?.show(component.windowId)
     } catch {
       this.message = this.language === 'ru'
@@ -788,7 +1045,8 @@ export class UiWindow implements GameWindow {
 
   private openPowerRedistribution(): void {
     try {
-      this.manager?.get('powerDistribution')
+      const target = this.manager?.get('powerDistribution')
+      if (!target) throw new Error('Power distribution window is not registered')
       this.manager?.show('powerDistribution')
     } catch {
       this.message = this.language === 'ru'
@@ -802,7 +1060,7 @@ export class UiWindow implements GameWindow {
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
     ctx.strokeStyle = COLORS.border
     ctx.lineWidth = 1
-    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, Math.max(1, rect.width - 1), Math.max(1, rect.height - 1))
+    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, Math.max(0, rect.width - 1), Math.max(0, rect.height - 1))
   }
 
   private drawGlowText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, font: string, color: string, glow: string, blur: number): void {

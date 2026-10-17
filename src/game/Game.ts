@@ -441,7 +441,7 @@ export class Game {
       .register(maze)
 
     // The intended recovery walkthrough starts at the console, not at a puzzle.
-    this.windows.show('console')
+    this.windows.show('language')
   }
 
   start() {

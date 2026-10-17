@@ -2,12 +2,25 @@ export type KeyState = {
   down: boolean
 }
 
+/** A keyboard event captured by the game, preserving both typed character and physical key. */
+export type InputKeyEvent = {
+  key: string
+  code: string
+  shiftKey: boolean
+  ctrlKey: boolean
+  altKey: boolean
+  metaKey: boolean
+  repeat: boolean
+}
+
 export class Input {
   private keys = new Map<string, KeyState>()
   private pressedThisFrame = new Set<string>()
   private releasedThisFrame = new Set<string>()
-  // Keep ordered key events, including OS auto-repeat, for terminal text entry.
+
+  // Ordered keyboard input, including OS auto-repeat, for terminal/editor text entry.
   private pressedKeyValues: string[] = []
+  private pressedKeyEvents: InputKeyEvent[] = []
   private wheelDeltaY = 0
 
   private pointerX = 0
@@ -24,31 +37,42 @@ export class Input {
       this.keys.set(e.code, { down: true })
     }
 
-    // Tab must be explicitly included: unlike letters, its key string is longer than one character.
+    // Keep text input layout-aware. The editor can use `code` for Vim commands
+    // in NORMAL mode and `key` for real text in INSERT/COMMAND/SEARCH modes.
+    const isSupportedKey =
+      e.key === 'Backspace' ||
+      e.key === 'Enter' ||
+      e.key === 'Escape' ||
+      e.key === 'Tab' ||
+      e.key === 'Delete' ||
+      e.key === 'Home' ||
+      e.key === 'End' ||
+      e.key === 'PageUp' ||
+      e.key === 'PageDown' ||
+      e.key.startsWith('Arrow') ||
+      e.key.length === 1
+
     if (
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
       !e.isComposing &&
-      (
-        e.key === 'Backspace' ||
-        e.key === 'Enter' ||
-        e.key === 'Escape' ||
-        e.key === 'Tab' ||
-        e.key === 'Delete' ||
-        e.key === 'Home' ||
-        e.key === 'End' ||
-        e.key === 'PageUp' ||
-        e.key === 'PageDown' ||
-        e.key.startsWith('Arrow') ||
-        e.key.length === 1
-      )
+      isSupportedKey
     ) {
       this.pressedKeyValues.push(e.key)
+      this.pressedKeyEvents.push({
+        key: e.key,
+        code: e.code,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+        repeat: e.repeat,
+      })
     }
 
-    // Prevent browser focus traversal while using the game's terminal, and retain the
-    // existing prevention for editing/navigation keys.
+    // Prevent browser focus traversal while using the game's terminal, and retain
+    // the existing prevention for editing/navigation keys.
     if (
       (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) ||
       e.key === 'Backspace' ||
@@ -110,6 +134,7 @@ export class Input {
     this.pressedThisFrame.clear()
     this.releasedThisFrame.clear()
     this.pressedKeyValues.length = 0
+    this.pressedKeyEvents.length = 0
     this.wheelDeltaY = 0
     this.pointerDown = false
     this.pointerDeltaX = 0
@@ -155,6 +180,14 @@ export class Input {
     return [...this.pressedKeyValues]
   }
 
+  /**
+   * Full ordered key events. `key` respects the active keyboard layout; `code`
+   * identifies the physical key and is useful for layout-independent shortcuts.
+   */
+  getPressedKeyEvents(): InputKeyEvent[] {
+    return this.pressedKeyEvents.map((event) => ({ ...event }))
+  }
+
   /** Wheel delta accumulated since the previous call; negative means scroll up. */
   consumeWheelDelta(): number {
     const value = this.wheelDeltaY
@@ -182,6 +215,7 @@ export class Input {
     this.pressedThisFrame.clear()
     this.releasedThisFrame.clear()
     this.pressedKeyValues.length = 0
+    this.pressedKeyEvents.length = 0
     this.pointerDeltaX = 0
     this.pointerDeltaY = 0
   }
