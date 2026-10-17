@@ -24,6 +24,7 @@ export class Input {
       this.keys.set(e.code, { down: true })
     }
 
+    // Tab must be explicitly included: unlike letters, its key string is longer than one character.
     if (
       !e.ctrlKey &&
       !e.metaKey &&
@@ -33,6 +34,7 @@ export class Input {
         e.key === 'Backspace' ||
         e.key === 'Enter' ||
         e.key === 'Escape' ||
+        e.key === 'Tab' ||
         e.key === 'ArrowUp' ||
         e.key === 'ArrowDown' ||
         e.key.length === 1
@@ -41,7 +43,10 @@ export class Input {
       this.pressedKeyValues.push(e.key)
     }
 
+    // Prevent browser focus traversal while using the game's terminal, and retain the
+    // existing prevention for editing/navigation keys.
     if (
+      (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) ||
       e.key === 'Backspace' ||
       e.key === 'Enter' ||
       e.key === 'Escape' ||
@@ -53,6 +58,7 @@ export class Input {
       e.preventDefault()
     }
   }
+
   private readonly onKeyUp = (e: KeyboardEvent) => {
     if (this.keys.has(e.code)) {
       this.releasedThisFrame.add(e.code)
