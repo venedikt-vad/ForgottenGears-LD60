@@ -23,6 +23,7 @@ const COLORS = {
   text: '#bff7cf',
   bright: '#eaffea',
   glow: 'rgba(120, 255, 160, 0.3)',
+  barTrack: 'rgba(47, 107, 69, 0.25)',
 }
 
 const NORTH = 1
@@ -45,6 +46,11 @@ const MARGIN = 40
 const BLINK_DURATION = 0.36
 // Powered paths pulse gently (a slow sine on glow strength).
 const BREATH_SPEED = 2.6
+
+// Each connected output draws this share of the power budget; at POWER_CAPACITY
+// (100%) the grid is over capacity: the gauge turns red and the game glow is cut.
+const POWER_PER_OUTPUT = 0.3
+const POWER_CAPACITY = 1
 
 // Show animation: the grid lines stretch across first, then the pipes flicker in.
 const APPEAR_GRID = 0.5
@@ -229,6 +235,36 @@ export class PowerDistributionWindow implements GameWindow {
     this.blink = new Array<number>(this.powered.length).fill(0)
   }
 
+  /**
+   * EXPOSED GAME STATE — powered status of every output, in SYSTEMS order.
+   * An output counts as powered when its cell carries power and its terminal
+   * faces outward (ready to feed its system).
+   */
+  get outputStatus(): boolean[] {
+    return this.sinks.map((sink, i) => {
+      const index = this.sinkIndices[i]
+      return this.powered[index] && (this.masks[index] & sink.bit) !== 0
+    })
+  }
+
+  /** EXPOSED GAME STATE — how many outputs are currently powered. */
+  get outputsOnline(): number {
+    return this.outputsPowered
+  }
+
+  /**
+   * EXPOSED GAME STATE — overall power consumption, where each connected output
+   * draws POWER_PER_OUTPUT (30%). >= POWER_CAPACITY (100%) means over capacity.
+   */
+  get powerConsumption(): number {
+    return this.outputsPowered * POWER_PER_OUTPUT
+  }
+
+  /** EXPOSED GAME STATE — true while consumption is at or above capacity. */
+  get powerOverCapacity(): boolean {
+    return this.powerConsumption >= POWER_CAPACITY
+  }
+
   update(dt: number, input: Input): void {
     this.appearTime += dt
     this.clock += dt
@@ -285,11 +321,12 @@ export class PowerDistributionWindow implements GameWindow {
     ctx.textAlign = 'left'
     ctx.font = `${fontSize}px "${FONT_FAMILY}", monospace`
     ctx.fillStyle = COLORS.text
-    ctx.fillText('GRID LINK // ROUTE POWER TO ALL OUTPUTS', MARGIN, MARGIN + lineHeight + 1)
+    ctx.fillText('GRID LINK // ROUTE POWER', MARGIN, MARGIN + lineHeight + 1)
 
     this.drawStatus(ctx, width, fontSize, lineHeight)
     this.drawGrid(ctx)
     this.drawOutputList(ctx, fontSize, lineHeight)
+    this.drawConsumptionGauge(ctx, fontSize, lineHeight)
 
     ctx.textAlign = 'left'
     ctx.font = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
@@ -303,9 +340,9 @@ export class PowerDistributionWindow implements GameWindow {
     const footerHeight = MARGIN + Math.ceil(fontSize * 1.32)
     const availableHeight = Math.max(0, height - headerHeight - footerHeight)
 
-    // Reserve a column on the right for the output legend.
+    // Reserve a column on the right for the consumption gauge and the output legend.
     this.listWidth = Math.max(150, Math.min(320, width * 0.24))
-    const gap = 24
+    const gap = 56
     const contentWidth = Math.max(0, width - MARGIN * 2 - this.listWidth - gap)
     this.listX = width - MARGIN - this.listWidth
 
@@ -338,7 +375,12 @@ export class PowerDistributionWindow implements GameWindow {
 
     ctx.fillStyle = COLORS.panel
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-    ctx.strokeStyle = this.solved ? COLORS.sinkOn : COLORS.border
+    // Red outline while over capacity, green once solved, subtle border otherwise.
+    ctx.strokeStyle = this.powerOverCapacity
+      ? COLORS.sinkOff
+      : this.solved
+        ? COLORS.sinkOn
+        : COLORS.border
     ctx.lineWidth = 2
     ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
 
@@ -445,8 +487,11 @@ export class PowerDistributionWindow implements GameWindow {
     const done = this.outputsPowered
     const total = this.sinks.length
     ctx.fillText(`${done}/${total} ONLINE`, width - MARGIN, MARGIN)
-    ctx.fillStyle = this.solved ? COLORS.sinkOn : COLORS.sinkOff
-    ctx.fillText(this.solved ? 'GRID STABLE' : 'RECOVERY REQUIRED', width - MARGIN, MARGIN + lineHeight + 1)
+    // Over capacity takes priority: it is the reason recovery is required.
+    const over = this.powerOverCapacity
+    ctx.fillStyle = over ? COLORS.sinkOff : this.solved ? COLORS.sinkOn : COLORS.sinkOff
+    const status = over ? 'OVER CAPACITY' : this.solved ? 'GRID STABLE' : 'RECOVERY REQUIRED'
+    ctx.fillText(status, width - MARGIN, MARGIN + lineHeight + 1)
     ctx.textAlign = 'left'
   }
 
@@ -509,6 +554,67 @@ export class PowerDistributionWindow implements GameWindow {
 
       y += rowH
     }
+    ctx.restore()
+  }
+
+  /**
+   * Vertical gauge just left of the output legend: overall power consumption,
+   * 30% per connected output. Turns red at or above 100%.
+   */
+  private drawConsumptionGauge(
+    ctx: CanvasRenderingContext2D,
+    fontSize: number,
+    lineHeight: number,
+  ): void {
+    const alpha = clamp01(this.appearTime / (APPEAR_GRID + APPEAR_SYMBOL * 0.5))
+    if (alpha <= 0 || this.listWidth <= 0 || this.cellSize <= 0) return
+
+    const barWidth = 18
+    const small = Math.max(8, fontSize - 2)
+    const panelLeft = this.listX - 10
+    const barX = panelLeft - 12 - barWidth
+    const gridRight = this.gridX + this.cellSize * COLS
+    // Skip the gauge when the grid leaves no room for it before the legend.
+    if (panelLeft - gridRight < barWidth + small + 22) return
+
+    const panelTop = this.gridY - 8
+    const rowH = lineHeight + 8
+    const panelH = lineHeight + 12 + rowH * this.sinks.length + 10
+
+    const consumption = this.powerConsumption
+    const over = this.powerOverCapacity
+    // Value fills up during the reveal, then tracks consumption (capped at full).
+    const fill = clamp01(consumption) * clamp01((this.appearTime - APPEAR_GRID) / APPEAR_SYMBOL)
+
+    ctx.save()
+    ctx.globalAlpha = alpha
+
+    ctx.fillStyle = COLORS.barTrack
+    ctx.fillRect(barX, panelTop, barWidth, panelH)
+    ctx.strokeStyle = COLORS.border
+    ctx.lineWidth = 1
+    ctx.strokeRect(barX + 0.5, panelTop + 0.5, barWidth - 1, panelH - 1)
+
+    ctx.fillStyle = over ? COLORS.sinkOff : COLORS.powered
+    ctx.shadowColor = COLORS.glow
+    ctx.shadowBlur = over ? 12 : 6
+    const filled = panelH * fill
+    ctx.fillRect(barX + 1, panelTop + panelH - 1 - filled, barWidth - 2, filled)
+    ctx.shadowBlur = 0
+
+    ctx.font = `${small}px "${FONT_FAMILY}", monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillStyle = over ? COLORS.sinkOff : COLORS.bright
+    ctx.fillText(`${Math.round(consumption * 100)}%`, barX + barWidth / 2, panelTop - 6)
+
+    // Caption runs bottom-to-top along the left of the bar.
+    ctx.translate(barX - small / 2 - 4, panelTop + panelH / 2)
+    ctx.rotate(-Math.PI / 2)
+    ctx.fillStyle = COLORS.dim
+    ctx.textBaseline = 'middle'
+    ctx.fillText('POWER CONSUMPTION', 0, 0)
+
     ctx.restore()
   }
 

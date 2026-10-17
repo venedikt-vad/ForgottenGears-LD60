@@ -34,6 +34,9 @@ export class Game {
   private lastTime = 0
   private fontLoaded = false
 
+  // Power distribution owns shared game state, including whether the glow is allowed.
+  private readonly powerDistribution: PowerDistributionWindow
+
   // Existing player/gameplay state is retained.
   private player = { x: 200, y: 200, size: 32, speed: 240 }
 
@@ -91,6 +94,7 @@ export class Game {
     const reactor = new ReactorCoreWindow()
     const memoryCore = new MemoryCoreWindow()
     const powerDistribution = new PowerDistributionWindow()
+    this.powerDistribution = powerDistribution
 
     // Register every game window, including the code editor.
     this.windows
@@ -280,6 +284,10 @@ export class Game {
       glowCanvas.width,
       glowCanvas.height,
     )
+
+    // The bloom is cut game-wide while the power grid is over capacity, and comes
+    // back on its own once the player routes consumption back under the limit.
+    if (this.powerDistribution.powerOverCapacity) return
 
     glowCtx.drawImage(this.canvas, 0, 0)
   }
