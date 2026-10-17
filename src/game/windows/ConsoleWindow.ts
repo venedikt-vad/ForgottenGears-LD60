@@ -25,6 +25,12 @@ export class ConsoleWindow implements GameWindow {
   private blinkClock = 0
   private readonly charsPerSecond = 7200
   private command = ''
+  // Command history lives on this window instance, so it survives clear/reboot and
+  // switching between windows for the whole game session.
+  private commandHistory: string[] = []
+  private commandHistoryIndex = 0
+  private commandDraft = ''
+  private browsingCommandHistory = false
   private promptInput = ''
 
   // Scroll position is a line index from the start of the wrapped transcript.
@@ -106,7 +112,8 @@ export class ConsoleWindow implements GameWindow {
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
-    ctx.clearRect(0,0,  width, height)
+    ctx.fillStyle = '#020402'
+    ctx.fillRect(0, 0, width, height)
 
     // Smaller IBM BIOS text and tight leading show many more rows at once.
     const margin = width < 560 ? 8 : 12
@@ -218,19 +225,62 @@ export class ConsoleWindow implements GameWindow {
     }
   }
 
+  
   private handleTerminalInput(input: Input): void {
     for (const key of input.getPressedKeyValues()) {
       if (key === 'Enter') {
         const typed = this.command.trim()
         this.appendTranscript(`${this.getTerminalPrompt()}${this.command}\n`)
+
+        if (typed) this.commandHistory.push(typed)
+
+        this.commandHistoryIndex = this.commandHistory.length
+        this.commandDraft = ''
+        this.browsingCommandHistory = false
         this.command = ''
         this.followTail = true
+
         if (typed) this.executeCommand(typed)
+        continue
+      }
+
+      if (key === 'ArrowUp') {
+        if (this.commandHistory.length === 0) continue
+
+        if (!this.browsingCommandHistory) {
+          this.commandDraft = this.command
+          this.commandHistoryIndex = this.commandHistory.length
+          this.browsingCommandHistory = true
+        }
+
+        this.commandHistoryIndex = Math.max(
+          0,
+          this.commandHistoryIndex - 1,
+        )
+        this.command = this.commandHistory[this.commandHistoryIndex] ?? ''
+        continue
+      }
+
+      if (key === 'ArrowDown') {
+        if (!this.browsingCommandHistory) continue
+
+        if (this.commandHistoryIndex < this.commandHistory.length - 1) {
+          this.commandHistoryIndex += 1
+          this.command = this.commandHistory[this.commandHistoryIndex] ?? ''
+        } else {
+          this.commandHistoryIndex = this.commandHistory.length
+          this.command = this.commandDraft
+          this.commandDraft = ''
+          this.browsingCommandHistory = false
+        }
         continue
       }
 
       if (key === 'Backspace') {
         this.command = this.command.slice(0, -1)
+        this.browsingCommandHistory = false
+        this.commandHistoryIndex = this.commandHistory.length
+        this.commandDraft = ''
         continue
       }
 
@@ -238,9 +288,13 @@ export class ConsoleWindow implements GameWindow {
 
       if (key.length === 1 && this.command.length < 128) {
         this.command += key
+        this.browsingCommandHistory = false
+        this.commandHistoryIndex = this.commandHistory.length
+        this.commandDraft = ''
       }
     }
   }
+
 
   private executeCommand(rawCommand: string): void {
     const command = rawCommand.toLowerCase().trim()

@@ -18,22 +18,41 @@ export class Input {
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
     const state = this.keys.get(e.code)
+
     if (!state?.down) {
       this.pressedThisFrame.add(e.code)
       this.keys.set(e.code, { down: true })
     }
 
-    if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) {
-      if (e.key === 'Backspace' || e.key === 'Enter' || e.key === 'Escape' || e.key.length === 1) {
-        this.pressedKeyValues.push(e.key)
-      }
+    if (
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.isComposing &&
+      (
+        e.key === 'Backspace' ||
+        e.key === 'Enter' ||
+        e.key === 'Escape' ||
+        e.key === 'ArrowUp' ||
+        e.key === 'ArrowDown' ||
+        e.key.length === 1
+      )
+    ) {
+      this.pressedKeyValues.push(e.key)
     }
 
-    if (e.key === 'Backspace' || e.key.startsWith('Arrow') || e.key === ' ' || e.key === 'PageUp' || e.key === 'PageDown') {
+    if (
+      e.key === 'Backspace' ||
+      e.key === 'Enter' ||
+      e.key === 'Escape' ||
+      e.key.startsWith('Arrow') ||
+      e.key === ' ' ||
+      e.key === 'PageUp' ||
+      e.key === 'PageDown'
+    ) {
       e.preventDefault()
     }
   }
-
   private readonly onKeyUp = (e: KeyboardEvent) => {
     if (this.keys.has(e.code)) {
       this.releasedThisFrame.add(e.code)
