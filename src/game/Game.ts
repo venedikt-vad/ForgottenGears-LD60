@@ -1,14 +1,18 @@
 import { Input } from './Input'
 import { CursorDrawer } from './CursorDrawer'
 import { FONT_FAMILY, LOST_LANGUAGE_FAMILY, loadFont } from './fonts'
+
 import { ConsoleWindow } from './windows/ConsoleWindow'
+import { CodeEditorWindow } from './windows/CodeEditorWindow'
 import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
 import { MemoryCoreWindow } from './windows/MemoryCoreWindow'
 import { PowerDistributionWindow } from './windows/PowerDistributionWindow'
 import { UiWindow } from './windows/UiWindow'
 import { WindowManager } from './windows/WindowManager'
-import type { GameLanguage } from './windows/GameWindow'
 import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
+
+import type { GameLanguage } from './windows/GameWindow'
+import { VirtualFileSystem } from './VirtualFileSystem'
 
 export type GameOptions = {
   canvas: HTMLCanvasElement
@@ -37,33 +41,62 @@ export class Game {
 
   constructor(options: GameOptions) {
     this.canvas = options.canvas
+
     const ctx = this.canvas.getContext('2d')
-    if (!ctx) throw new Error('Failed to get 2D rendering context')
+    if (!ctx) {
+      throw new Error('Failed to get 2D rendering context')
+    }
     this.ctx = ctx
 
     this.glowCanvas = options.glowCanvas
+
     const glowCtx = this.glowCanvas.getContext('2d')
-    if (!glowCtx) throw new Error('Failed to get 2D rendering context for glow canvas')
+    if (!glowCtx) {
+      throw new Error('Failed to get 2D rendering context for glow canvas')
+    }
     this.glowCtx = glowCtx
 
     this.input = new Input()
     this.windows = new WindowManager(this.input)
     this.cursor = new CursorDrawer()
 
-    const consoleWindow = new ConsoleWindow()
-    const uiWindow = new UiWindow()
-    const languageWindow = new LanguageSelectWindow((language: GameLanguage) => {
-      consoleWindow.setLanguage(language)
-      uiWindow.setLanguage(language)
-      this.windows.show('console')
+    // One shared virtual filesystem for the console and code editor.
+    // All file changes remain inside the current game session.
+    const fileSystem = new VirtualFileSystem()
+
+    // Create the editor before the console so the console can open it.
+    const codeEditor = new CodeEditorWindow({
+      fileSystem,
+      returnWindowId: 'console',
     })
+
+    // The console and editor must share the same filesystem instance.
+    const consoleWindow = new ConsoleWindow(
+      fileSystem,
+      codeEditor,
+    )
+
+    const uiWindow = new UiWindow()
+
+    const languageWindow = new LanguageSelectWindow(
+      (language: GameLanguage) => {
+        consoleWindow.setLanguage(language)
+        codeEditor.setLanguage(language)
+        uiWindow.setLanguage(language)
+
+        this.windows.show('console')
+      },
+    )
+
     const reactor = new ReactorCoreWindow()
     const memoryCore = new MemoryCoreWindow()
     const powerDistribution = new PowerDistributionWindow()
 
+    // Register every game window, including the code editor.
     this.windows
       .register(languageWindow)
       .register(consoleWindow)
+      .register(codeEditor)
       .register(uiWindow)
       .register(reactor)
       .register(memoryCore)
@@ -77,9 +110,13 @@ export class Game {
 
   start() {
     if (this.running) return
+
     this.running = true
 
-    Promise.all([loadFont(FONT_FAMILY), loadFont(LOST_LANGUAGE_FAMILY)])
+    Promise.all([
+      loadFont(FONT_FAMILY),
+      loadFont(LOST_LANGUAGE_FAMILY),
+    ])
       .then(() => {
         this.fontLoaded = true
       })
@@ -89,6 +126,7 @@ export class Game {
 
     this.input.attach()
     this.cursor.attach(this.canvas)
+
     window.addEventListener('resize', this.onResize)
     this.resize()
 
@@ -98,8 +136,10 @@ export class Game {
 
   stop() {
     this.running = false
+
     this.input.detach()
     this.cursor.detach()
+
     window.removeEventListener('resize', this.onResize)
   }
 
@@ -120,13 +160,37 @@ export class Game {
   private update(dt: number) {
     // Original movement code is kept unchanged.
     const p = this.player
+
     let dx = 0
     let dy = 0
 
-    if (this.input.isDown('KeyA') || this.input.isDown('ArrowLeft')) dx -= 1
-    if (this.input.isDown('KeyD') || this.input.isDown('ArrowRight')) dx += 1
-    if (this.input.isDown('KeyW') || this.input.isDown('ArrowUp')) dy -= 1
-    if (this.input.isDown('KeyS') || this.input.isDown('ArrowDown')) dy += 1
+    if (
+      this.input.isDown('KeyA') ||
+      this.input.isDown('ArrowLeft')
+    ) {
+      dx -= 1
+    }
+
+    if (
+      this.input.isDown('KeyD') ||
+      this.input.isDown('ArrowRight')
+    ) {
+      dx += 1
+    }
+
+    if (
+      this.input.isDown('KeyW') ||
+      this.input.isDown('ArrowUp')
+    ) {
+      dy -= 1
+    }
+
+    if (
+      this.input.isDown('KeyS') ||
+      this.input.isDown('ArrowDown')
+    ) {
+      dy += 1
+    }
 
     if (dx !== 0 && dy !== 0) {
       const inv = 1 / Math.sqrt(2)
@@ -138,9 +202,18 @@ export class Game {
     p.y += dy * p.speed * dt
 
     const half = p.size / 2
-    p.x = Math.max(half, Math.min(this.width - half, p.x))
-    p.y = Math.max(half, Math.min(this.height - half, p.y))
 
+    p.x = Math.max(
+      half,
+      Math.min(this.width - half, p.x),
+    )
+
+    p.y = Math.max(
+      half,
+      Math.min(this.height - half, p.y),
+    )
+
+    // Updates the active window, including the editor and console.
     this.windows.update(dt)
   }
 
@@ -150,25 +223,45 @@ export class Game {
     ctx.clearRect(0, 0, width, height)
 
     ctx.fillStyle = 'rgba(46, 48, 58, 0.6)'
-    for (let x = 0; x < width; x += 64) ctx.fillRect(x, 0, 1, height)
-    for (let y = 0; y < height; y += 64) ctx.fillRect(0, y, width, 1)
+
+    for (let x = 0; x < width; x += 64) {
+      ctx.fillRect(x, 0, 1, height)
+    }
+
+    for (let y = 0; y < height; y += 64) {
+      ctx.fillRect(0, y, width, 1)
+    }
 
     const p = this.player
+
     ctx.fillStyle = '#c084fc'
-    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
+    ctx.fillRect(
+      p.x - p.size / 2,
+      p.y - p.size / 2,
+      p.size,
+      p.size,
+    )
 
     if (this.fontLoaded) {
       ctx.fillStyle = '#f3f4f6'
       ctx.font = `32px "${FONT_FAMILY}", monospace`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
-      ctx.fillText('FORGOTTEN GEARS', this.width / 2, 16)
+      ctx.fillText(
+        'FORGOTTEN GEARS',
+        this.width / 2,
+        16,
+      )
     } else {
       ctx.fillStyle = '#9ca3af'
       ctx.font = '16px monospace'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
-      ctx.fillText('Loading font...', this.width / 2, 16)
+      ctx.fillText(
+        'Loading font...',
+        this.width / 2,
+        16,
+      )
     }
 
     // Draw the active window on top of the existing game scene.
@@ -180,12 +273,20 @@ export class Game {
 
   private mirrorToGlow() {
     const { glowCtx, glowCanvas } = this
-    glowCtx.clearRect(0, 0, glowCanvas.width, glowCanvas.height)
+
+    glowCtx.clearRect(
+      0,
+      0,
+      glowCanvas.width,
+      glowCanvas.height,
+    )
+
     glowCtx.drawImage(this.canvas, 0, 0)
   }
 
   private resize() {
     const dpr = window.devicePixelRatio || 1
+
     this.width = window.innerWidth
     this.height = window.innerHeight
 
@@ -195,6 +296,7 @@ export class Game {
     for (const canvas of [this.canvas, this.glowCanvas]) {
       canvas.width = pixelWidth
       canvas.height = pixelHeight
+
       canvas.style.width = `${this.width}px`
       canvas.style.height = `${this.height}px`
     }

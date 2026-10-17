@@ -5,6 +5,8 @@ import { FONT_FAMILY } from '../fonts'
 import type { GameLanguage, GameWindow } from './GameWindow'
 
 import type { WindowManager } from './WindowManager'
+import { VirtualFileSystem } from '../VirtualFileSystem'
+import type { CodeEditorWindow } from './CodeEditorWindow'
 
 
 
@@ -93,7 +95,7 @@ const ROBOT_COMPONENTS: RobotComponentInfo[] = [
     recommendation: { ru: 'Проверьте состояние OSK-710 и загрузку CPU-730.', en: 'Inspect OSK-710 and CPU-730 load before restarting the scheduler.' },
   },
   {
-    id: 'CAM-410', name: 'Primary Camera Array', category: 'SENSORS', status: 'ONLINE',
+    id: 'CAM-410', name: 'Primary Camera Array', category: 'SENSORS', status: 'OFFLINE',
     description: { ru: 'Основной массив визуальных датчиков.', en: 'Primary visual sensor array.' },
     function: { ru: 'Передаёт изображения для распознавания окружающей среды.', en: 'Provides images for environmental perception.' },
     dependencies: ['PDU-230'], affects: ['CPU-730', 'LOC-630'],
@@ -204,6 +206,54 @@ const ROBOT_COMPONENTS: RobotComponentInfo[] = [
     symptoms: { ru: 'Опасные команды не блокируются или безопасный режим не активируется.', en: 'Unsafe commands are not blocked or safe mode fails to activate.' },
     recommendation: { ru: 'Не обходите защиту; проверьте регистрацию ошибок DGN-900.', en: 'Do not bypass safety controls; inspect fault records from DGN-900.' },
   },
+  {
+    id: 'RCTR-110', name: 'Reactor Control Unit', category: 'POWER', status: 'DEGRADED',
+    description: { ru: 'Контроллер запуска основного источника питания.', en: 'Startup controller for the primary power core.' },
+    function: { ru: 'Выполняет безопасную последовательность запуска и подтверждает стабильность выхода PWR-100.', en: 'Runs the safe startup sequence and verifies PWR-100 output stability.' },
+    dependencies: ['PWR-100', 'PDU-230'], affects: ['BUS-T-240', 'PDU-230'],
+    symptoms: { ru: 'Источник питания доступен, но последовательность запуска не завершена.', en: 'The power source is available, but startup has not completed.' },
+    recommendation: { ru: 'Прочитайте /etc/power/reactor-sequence.txt и откройте редактор RCTR-110.', en: 'Read /etc/power/reactor-sequence.txt and open the RCTR-110 editor.' },
+  },
+  {
+    id: 'BUS-T-240', name: 'Torso Power Bus', category: 'POWER', status: 'OFFLINE',
+    description: { ru: 'Основная силовая шина центрального корпуса.', en: 'Main power bus for the robot torso.' },
+    function: { ru: 'Передаёт питание от PDU-230 к корпусным подсистемам и приводным шинам.', en: 'Routes PDU-230 power to torso subsystems and actuator buses.' },
+    dependencies: ['PDU-230', 'RCTR-110'], affects: ['ACT-610', 'ANL-450', 'SRV-620'],
+    symptoms: { ru: 'Контроллеры могут отвечать по вспомогательному питанию, но корпусные каналы остаются недоступны.', en: 'Controllers may respond on auxiliary power while body channels remain unavailable.' },
+    recommendation: { ru: 'Проверьте карту линий питания и активируйте BODY_MAIN после запуска реактора.', en: 'Inspect the power-rail map and enable BODY_MAIN after reactor startup.' },
+  },
+  {
+    id: 'ANL-450', name: 'Chemical & Atmospheric Analyzer', category: 'SENSORS', status: 'OFFLINE',
+    description: { ru: 'Анализатор химического состава и параметров атмосферы.', en: 'Analyzer for chemical composition and atmospheric conditions.' },
+    function: { ru: 'Считывает данные измерительных каналов A и B.', en: 'Reads data from measurement channels A and B.' },
+    dependencies: ['PDU-230', 'BUS-T-240'], affects: ['DGN-900'],
+    symptoms: { ru: 'Интерфейс анализатора недоступен либо один из каналов не проходит самотест.', en: 'The analyzer UI is unavailable or one of its channels fails self-test.' },
+    recommendation: { ru: 'Для доступа к панели включите вспомогательное питание командой power ANL-450 on, затем изучите channel-map.cfg.', en: 'Enable its auxiliary controller rail with power ANL-450 on, then inspect channel-map.cfg.' },
+  },
+  {
+    id: 'ARM-R-660', name: 'Right Arm Assembly', category: 'BODY', status: 'OFFLINE',
+    description: { ru: 'Правая рука робота как единый аппаратный узел.', en: 'The robot right arm as a hardware assembly.' },
+    function: { ru: 'Обеспечивает движение правой руки через шину приводов.', en: 'Provides right-arm motion through the actuator bus.' },
+    dependencies: ['BUS-T-240', 'ACT-610', 'SRV-620'], affects: ['LOC-630'],
+    symptoms: { ru: 'После подачи питания узел не обнаруживается в аппаратной карте.', en: 'The assembly remains undetected after power is restored.' },
+    recommendation: { ru: 'Проверьте /sys/body/assembly-map.cfg: это может быть отсутствие аппаратного модуля, а не сбой питания.', en: 'Check /sys/body/assembly-map.cfg; this may be missing hardware rather than a power fault.' },
+  },
+  {
+    id: 'LEG-L-670', name: 'Left Lower Leg Assembly', category: 'BODY', status: 'OFFLINE',
+    description: { ru: 'Нижний сегмент левой ноги ниже коленного сустава.', en: 'The lower segment of the left leg below the knee joint.' },
+    function: { ru: 'Передаёт усилие от коленного узла к стопе и датчикам опоры.', en: 'Transfers force from the knee joint to the foot and contact sensors.' },
+    dependencies: ['BUS-T-240', 'ACT-610', 'SRV-620', 'FRC-440'], affects: ['BAL-640', 'LOC-630'],
+    symptoms: { ru: 'Неполная кинематическая цепь левой ноги и потеря опоры.', en: 'Incomplete left-leg kinematic chain and loss of support.' },
+    recommendation: { ru: 'Сверьте физическую сборку с /sys/body/assembly-map.cfg.', en: 'Compare the physical assembly against /sys/body/assembly-map.cfg.' },
+  },
+  {
+    id: 'MCM-740', name: 'Motion Command Memory', category: 'COMPUTE', status: 'CRITICAL',
+    description: { ru: 'Хранилище профиля и таблиц команд движения.', en: 'Storage for motion profiles and command tables.' },
+    function: { ru: 'Проверяет целостность профиля до передачи команд контроллеру движения.', en: 'Validates the command profile before passing commands to motion control.' },
+    dependencies: ['MEM-732', 'OSK-710'], affects: ['LOC-630', 'ACT-610'],
+    symptoms: { ru: 'Команда принимается консолью, но диспетчер движения отклоняет её до отправки на приводы.', en: 'The console accepts a command, but motion dispatch rejects it before it reaches the actuators.' },
+    recommendation: { ru: 'Прочитайте /sys/memory/motion-command-store.txt и /usr/share/docs/motion-control.txt.', en: 'Read /sys/memory/motion-command-store.txt and /usr/share/docs/motion-control.txt.' },
+  },
 ]
 
 
@@ -217,6 +267,8 @@ export class ConsoleWindow implements GameWindow {
 
 
   private manager: WindowManager | null = null
+  private readonly fileSystem: VirtualFileSystem
+  private readonly codeEditor: Pick<CodeEditorWindow, 'openFile'> | null
 
   private language: GameLanguage = 'ru'
 
@@ -229,22 +281,18 @@ export class ConsoleWindow implements GameWindow {
   private transcript = ''
 
   private bootText = ''
-
-  private bootProgress = 0
-
-  private printedBootChars = 0
-
+  private bootQueued = false
   private manualText = ''
+  private manualQueued = false
 
-  private manualProgress = 0
-
-  private printedManualChars = 0
-
-
+  // All console output is queued and streamed into the visible transcript.
+  // BIOS/manual output is faster; command results use a slower readable rate.
+  private pendingOutput = ''
+  private outputCharAccumulator = 0
 
   private blinkClock = 0
-
   private readonly charsPerSecond = 7200
+  private readonly terminalCharsPerSecond = 1350
 
   private command = ''
 
@@ -279,10 +327,10 @@ export class ConsoleWindow implements GameWindow {
 
 
 
-  constructor() {
-
+  constructor(fileSystem: VirtualFileSystem = new VirtualFileSystem(), codeEditor: Pick<CodeEditorWindow, 'openFile'> | null = null) {
+    this.fileSystem = fileSystem
+    this.codeEditor = codeEditor
     this.setLanguage('ru')
-
   }
 
 
@@ -294,6 +342,10 @@ export class ConsoleWindow implements GameWindow {
     this.manualText = this.getManualText()
 
     this.transcript = ''
+    this.pendingOutput = ''
+    this.outputCharAccumulator = 0
+    this.bootQueued = false
+    this.manualQueued = false
 
     this.command = ''
 
@@ -318,104 +370,55 @@ export class ConsoleWindow implements GameWindow {
 
 
   update(dt: number, input: Input): void {
-
     this.blinkClock += dt
-
     this.updateScroll(input)
 
-
-
     switch (this.stage) {
-
-      case 'boot': {
-
-        this.bootProgress = Math.min(this.bootText.length, this.bootProgress + dt * this.charsPerSecond)
-
-        const target = Math.floor(this.bootProgress)
-
-        if (target > this.printedBootChars) {
-
-          this.appendTranscript(this.bootText.slice(this.printedBootChars, target))
-
-          this.printedBootChars = target
-
+      case 'boot':
+        if (!this.bootQueued) {
+          this.appendTranscript(this.bootText)
+          this.bootQueued = true
         }
-
-        if (this.printedBootChars >= this.bootText.length) {
-
-          this.stage = 'manual-prompt'
-
-          this.followTail = true
-
-        }
-
         break
-
-      }
 
       case 'manual-prompt':
-
         this.handleManualPromptInput(input)
-
         break
 
-      case 'manual-stream': {
-
-        this.manualProgress = Math.min(this.manualText.length, this.manualProgress + dt * this.charsPerSecond)
-
-        const target = Math.floor(this.manualProgress)
-
-        if (target > this.printedManualChars) {
-
-          this.appendTranscript(this.manualText.slice(this.printedManualChars, target))
-
-          this.printedManualChars = target
-
+      case 'manual-stream':
+        if (!this.manualQueued) {
+          this.appendTranscript(`${this.manualText}\n`)
+          this.manualQueued = true
         }
-
-        if (this.printedManualChars >= this.manualText.length) {
-
-          this.appendTranscript('\n')
-
-          this.stage = 'manual-wait'
-
-          this.followTail = true
-
-        }
-
         break
-
-      }
 
       case 'manual-wait':
-
         for (const key of input.getPressedKeyValues()) {
-
           if (key === 'Enter') {
-
             this.appendTranscript('\n')
-
             this.openTerminal()
-
             break
-
           }
-
         }
-
         break
 
       case 'terminal':
-
         this.handleTerminalInput(input)
-
         break
-
     }
 
+    this.flushPendingOutput(dt)
+
+    // Advance boot/manual stages only after all queued output has reached the
+    // transcript, so the prompt never appears before the text finishes printing.
+    if (this.stage === 'boot' && this.bootQueued && this.pendingOutput.length === 0) {
+      this.stage = 'manual-prompt'
+      this.followTail = true
+    } else if (this.stage === 'manual-stream' && this.manualQueued && this.pendingOutput.length === 0) {
+      this.stage = 'manual-wait'
+      this.followTail = true
+    }
   }
-
-
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
 
@@ -596,11 +599,7 @@ export class ConsoleWindow implements GameWindow {
           this.appendTranscript('\n')
 
           this.stage = 'manual-stream'
-
-          this.manualProgress = 0
-
-          this.printedManualChars = 0
-
+          this.manualQueued = false
           this.followTail = true
 
         } else if (answer === 'N') {
@@ -611,9 +610,9 @@ export class ConsoleWindow implements GameWindow {
 
           this.appendTranscript(this.language === 'ru'
 
-            ? 'ОШИБКА ВВОДА: ВВЕДИТЕ Y ИЛИ N, ЗАТЕМ НАЖМИТЕ ENTER.\n'
+            ? 'ОШИБКА ВВОДА: ДОПУСТИМЫЕ ЗНАЧЕНИЯ — Y ИЛИ N.\n'
 
-            : 'INPUT ERROR: TYPE Y OR N, THEN PRESS ENTER.\n')
+            : 'INPUT ERROR: VALID VALUES ARE Y OR N.\n')
 
           this.followTail = true
 
@@ -778,6 +777,35 @@ export class ConsoleWindow implements GameWindow {
       return components.map((component) => `${enteredCommand} ${component.id}`)
     }
 
+    if (normalizedCommand === 'ls' || normalizedCommand === 'cat' || normalizedCommand === 'vim' || normalizedCommand === 'code') {
+      const argumentPrefix = rest.trim()
+      const candidates = this.fileSystem.getPathCandidates(argumentPrefix, normalizedCommand === 'ls' || argumentPrefix.length > 0)
+      return candidates.map((path) => `${enteredCommand} ${path}`)
+    }
+
+    if (normalizedCommand === 'find') {
+      const terms = ['power', 'analyzer', 'body', 'memory', 'motion', 'cooling', 'thermal']
+      const argumentPrefix = rest.trim().toLowerCase()
+      return terms
+        .filter((term) => term.startsWith(argumentPrefix))
+        .map((term) => `${enteredCommand} ${term}`)
+    }
+
+    if (normalizedCommand === 'edit' || normalizedCommand === 'power') {
+      const argumentPrefix = rest.trim().toUpperCase()
+      const ids = normalizedCommand === 'power' ? ['ANL-450'] : ROBOT_COMPONENTS.map((item) => item.id)
+      if (!argumentPrefix) {
+        return ids.map((id) => `${enteredCommand} ${id}${normalizedCommand === 'power' ? ' on' : ''}`)
+      }
+      if (normalizedCommand === 'power') {
+        const match = /^([A-Z0-9-]*)\s*(on|off)?$/i.exec(rest.trim())
+        if (match && match[2]) return []
+        const typedId = (match?.[1] ?? argumentPrefix).toUpperCase()
+        return ids.filter((id) => id.startsWith(typedId)).map((id) => `${enteredCommand} ${id} on`)
+      }
+      return ids.filter((id) => id.startsWith(argumentPrefix)).map((id) => `${enteredCommand} ${id}`)
+    }
+
     // The other commands take no arguments. Still complete their names uniformly,
     // but do not replace a trailing argument or unrelated text.
     if (rest.trim().length > 0) return []
@@ -791,7 +819,7 @@ export class ConsoleWindow implements GameWindow {
 
   private getCommandNames(): string[] {
     // `compinents` is retained as a compatibility alias for the original command spelling.
-    return ['help', 'components', 'compinents', 'info', 'status', 'diagnostics', 'ui', 'manual', 'clear', 'reboot']
+    return ['help', 'components', 'compinents', 'info', 'status', 'diagnostics', 'edit', 'vim', 'code', 'power', 'ls', 'cat', 'find', 'ui', 'manual', 'clear', 'reboot']
   }
 
   private clearCompletionState(): void {
@@ -803,7 +831,44 @@ export class ConsoleWindow implements GameWindow {
   private executeCommand(rawCommand: string): void {
     const parts = rawCommand.trim().split(/\s+/)
     const command = (parts.shift() ?? '').toLowerCase()
-    const argument = parts.join(' ').trim().toUpperCase()
+    const rawArgument = parts.join(' ').trim()
+    const argument = rawArgument.toUpperCase()
+
+    if (command === 'ls') {
+      this.appendLines([...this.fileSystem.list(rawArgument || '/', this.language), ''])
+      return
+    }
+    if (command === 'cat') {
+      if (!rawArgument) {
+        this.appendLines(this.language === 'ru'
+          ? ['ОШИБКА: УКАЖИТЕ ПУТЬ К ФАЙЛУ.', 'ПРИМЕР: cat /manual/operator.txt', '']
+          : ['ERROR: FILE PATH REQUIRED.', 'EXAMPLE: cat /manual/operator.txt', ''])
+        return
+      }
+      const contents = this.fileSystem.read(rawArgument, this.language)
+      this.appendLines(contents ? [...contents, ''] : (this.language === 'ru'
+        ? [`ОШИБКА: ФАЙЛ НЕ НАЙДЕН: ${rawArgument}`, 'Используйте ls или find для поиска файла.', '']
+        : [`ERROR: FILE NOT FOUND: ${rawArgument}`, 'Use ls or find to locate a file.', '']))
+      return
+    }
+    if (command === 'find') {
+      if (!rawArgument) {
+        this.appendLines(this.language === 'ru'
+          ? ['ОШИБКА: УКАЖИТЕ СЛОВО ДЛЯ ПОИСКА.', 'ПРИМЕР: find cooling', '']
+          : ['ERROR: SEARCH TERM REQUIRED.', 'EXAMPLE: find cooling', ''])
+        return
+      }
+      const matches = this.fileSystem.find(rawArgument, this.language)
+      this.appendLines([
+        this.language === 'ru' ? `РЕЗУЛЬТАТЫ ПОИСКА: ${rawArgument}` : `SEARCH RESULTS: ${rawArgument}`,
+        ...(matches.length
+          ? matches.map((match) => `${match.path}
+  ${match.preview}`)
+          : [this.language === 'ru' ? 'Совпадений нет.' : 'No matches found.']),
+        '',
+      ])
+      return
+    }
 
     // Keep the requested typo as an alias, but document the correct spelling.
     if (command === 'components' || command === 'compinents') {
@@ -822,6 +887,71 @@ export class ConsoleWindow implements GameWindow {
       this.printRobotStatus()
       return
     }
+    if (command === 'vim' || command === 'code') {
+      const path = rawArgument || '/opt/firmware/motion/оптимизатор_акселерации_1.0.18.drv'
+      if (!this.codeEditor) {
+        this.appendLines(this.language === 'ru'
+          ? ['РЕДАКТОР НЕ ПОДКЛЮЧЁН.', 'Создайте CodeEditorWindow с тем же VirtualFileSystem и передайте его в ConsoleWindow.', '']
+          : ['EDITOR IS NOT WIRED.', 'Create CodeEditorWindow with the same VirtualFileSystem and pass it to ConsoleWindow.', ''])
+        return
+      }
+      if (this.codeEditor.openFile(path, false)) {
+        this.appendLines(this.language === 'ru'
+          ? [`ОТКРЫТИЕ РЕДАКТОРА: ${path}`, 'NORMAL MODE: h/j/k/l или стрелки, i — ввод, :w — сохранить, :q — выход.', '']
+          : [`OPENING EDITOR: ${path}`, 'NORMAL MODE: h/j/k/l or arrows, i — insert, :w — save, :q — quit.', ''])
+        this.manager?.show('editor')
+      } else {
+        this.appendLines(this.language === 'ru'
+          ? [`НЕ УДАЛОСЬ ОТКРЫТЬ ФАЙЛ: ${path}`, 'Используйте ls /opt/firmware/motion/ для списка файлов.', '']
+          : [`COULD NOT OPEN FILE: ${path}`, 'Use ls /opt/firmware/motion/ to list files.', ''])
+      }
+      return
+    }
+    if (command === 'edit') {
+      const target = ROBOT_COMPONENTS.find((item) => item.id === argument)
+      if (!target) {
+        this.appendLines(this.language === 'ru'
+          ? [`КОМПОНЕНТ НЕ НАЙДЕН: ${rawArgument || '(пусто)'}`, 'Используйте components для списка ID.', '']
+          : [`COMPONENT NOT FOUND: ${rawArgument || '(empty)'}`, 'Use components to list valid IDs.', ''])
+        return
+      }
+      this.appendLines(this.language === 'ru'
+        ? [`ОТКРЫТИЕ ПАНЕЛИ ОБСЛУЖИВАНИЯ: ${target.id}`, 'Выберите этот компонент в панели для открытия его редактора.', '']
+        : [`OPENING SERVICE TOOLBAR: ${target.id}`, 'Select this component in the toolbar to open its editor.', ''])
+      this.manager?.show('ui')
+      return
+    }
+    if (command === 'power') {
+      const powerMatch = /^([A-Z0-9-]+)\s+(on|off)$/i.exec(rawArgument)
+      if (!powerMatch) {
+        this.appendLines(this.language === 'ru'
+          ? ['ФОРМАТ: power <ID> on|off', 'ПРИМЕР: power ANL-450 on', '']
+          : ['USAGE: power <ID> on|off', 'EXAMPLE: power ANL-450 on', ''])
+        return
+      }
+      const target = ROBOT_COMPONENTS.find((item) => item.id === powerMatch[1].toUpperCase())
+      if (!target) {
+        this.appendLines(this.language === 'ru'
+          ? [`КОМПОНЕНТ НЕ НАЙДЕН: ${powerMatch[1].toUpperCase()}`, 'Используйте components для списка ID.', '']
+          : [`COMPONENT NOT FOUND: ${powerMatch[1].toUpperCase()}`, 'Use components to list valid IDs.', ''])
+        return
+      }
+      if (target.id !== 'ANL-450') {
+        this.appendLines(this.language === 'ru'
+          ? [`ОТКАЗ: ПРЯМОЕ УПРАВЛЕНИЕ ПИТАНИЕМ ${target.id} ЧЕРЕЗ КОНСОЛЬ ЗАПРЕЩЕНО.`, 'Используйте штатную панель обслуживания.', '']
+          : [`DENIED: DIRECT CONSOLE POWER CONTROL FOR ${target.id} IS NOT PERMITTED.`, 'Use the standard service toolbar.', ''])
+        return
+      }
+      target.status = powerMatch[2].toLowerCase() === 'on' ? 'DEGRADED' : 'OFFLINE'
+      this.appendLines(powerMatch[2].toLowerCase() === 'on'
+        ? (this.language === 'ru'
+          ? ['PDU-230: AUX_DIAG -> ANL-450 [ENABLED]', 'ANL-450: КОНТРОЛЛЕР ОТВЕЧАЕТ. ИЗМЕРИТЕЛЬНЫЕ КАНАЛЫ ЕЩЁ НЕ ПРОШЛИ ПРОВЕРКУ.', 'Откройте панель командой ui или edit ANL-450.', '']
+          : ['PDU-230: AUX_DIAG -> ANL-450 [ENABLED]', 'ANL-450: CONTROLLER RESPONDING. MEASUREMENT CHANNELS ARE NOT YET VALIDATED.', 'Open the toolbar with ui or edit ANL-450.', ''])
+        : (this.language === 'ru'
+          ? ['PDU-230: AUX_DIAG -> ANL-450 [DISABLED]', 'ANL-450: КОНТРОЛЛЕР ОБЕСТОЧЕН.', '']
+          : ['PDU-230: AUX_DIAG -> ANL-450 [DISABLED]', 'ANL-450: CONTROLLER POWERED OFF.', '']))
+      return
+    }
 
     switch (command) {
 
@@ -835,6 +965,12 @@ export class ConsoleWindow implements GameWindow {
               '  info <ID>         — справка, например info CPU-730',
               '  status            — сводка состояния робота',
               '  diagnostics       — диагностика отказов и зависимостей',
+              '  edit <ID>         — открыть панель обслуживания компонента',
+              '  vim [путь]        — открыть Vim-подобный редактор кода',
+              '  power ANL-450 on  — включить вспомогательное питание анализатора',
+              '  ls [путь]         — список файлов и каталогов',
+              '  cat <путь>        — прочитать файл',
+              '  find <слово>      — поиск по файловой системе',
               '  ui                — открыть панель обслуживания',
               '  manual            — показать мануал',
               '  clear             — очистить экран (история сохранится)',
@@ -851,6 +987,12 @@ export class ConsoleWindow implements GameWindow {
               '  info <ID>         — component details, e.g. info CPU-730',
               '  status            — robot status summary',
               '  diagnostics       — inspect faults and dependencies',
+              '  edit <ID>         — open the component service toolbar',
+              '  vim [path]        — open the Vim-like code editor',
+              '  power ANL-450 on  — enable analyzer auxiliary power',
+              '  ls [path]         — list files and directories',
+              '  cat <path>        — read a file',
+              '  find <term>       — search the virtual filesystem',
               '  ui                — open service toolbar',
               '  manual            — print the manual',
               '  clear             — clear view (history is retained)',
@@ -1055,44 +1197,28 @@ export class ConsoleWindow implements GameWindow {
 
 
   /** Starts or restarts the BIOS sequence without discarding an existing transcript. */
-
   private beginBootSequence(preserveTranscript: boolean): void {
-
-    if (preserveTranscript && this.transcript.length > 0) {
-
-      this.transcript += '\n\n============================================================\n'
-
-      this.transcript += this.language === 'ru' ? 'ПОВТОРНЫЙ ЗАПУСК BIOS...' : 'BIOS RESTART...'
-
-      this.transcript += '\n============================================================\n\n'
-
+    if (preserveTranscript && (this.transcript.length > 0 || this.pendingOutput.length > 0)) {
+      this.appendTranscript(
+        `\n\n============================================================\n${
+          this.language === 'ru' ? 'ПОВТОРНЫЙ ЗАПУСК BIOS...' : 'BIOS RESTART...'
+        }\n============================================================\n\n`,
+      )
     } else if (!preserveTranscript) {
-
       this.transcript = ''
-
+      this.pendingOutput = ''
+      this.outputCharAccumulator = 0
     }
 
-
-
     this.bootText = this.getBootText()
-
-    this.bootProgress = 0
-
-    this.printedBootChars = 0
-
+    this.bootQueued = false
+    this.manualQueued = false
     this.promptInput = ''
-
     this.command = ''
-
     this.stage = 'boot'
-
     this.followTail = true
-
     this.scrollTopLine = 0
-
   }
-
-
 
   private getBootText(): string {
 
@@ -1612,7 +1738,7 @@ export class ConsoleWindow implements GameWindow {
 
       L('Recovery shell unavailable. Manual console only.', 'Оболочка восстановления недоступна. Доступна только консоль.'),
 
-      L('Type Y to view the operator manual, or N to continue without it.', 'Введите Y для открытия мануала или N для продолжения без него.'),
+      L('Operator manual available.', 'Доступен мануал оператора.'),
 
       '',
 
@@ -1766,7 +1892,7 @@ export class ConsoleWindow implements GameWindow {
 
   private getManualPromptLabel(): string {
 
-    return this.language === 'ru' ? 'ПОСМОТРЕТЬ МАНУАЛ? ВВЕДИТЕ Y И ENTER: ' : 'VIEW MANUAL? TYPE Y AND PRESS ENTER: '
+    return this.language === 'ru' ? 'МАНУАЛ ОПЕРАТОРА [Y/N]? ' : 'OPERATOR MANUAL [Y/N]? '
 
   }
 
@@ -1823,12 +1949,30 @@ export class ConsoleWindow implements GameWindow {
 
 
   private appendTranscript(text: string): void {
-
-    this.transcript += text
-
+    if (text.length === 0) return
+    this.pendingOutput += text
   }
 
+  private flushPendingOutput(dt: number): void {
+    if (this.pendingOutput.length === 0) {
+      this.outputCharAccumulator = 0
+      return
+    }
 
+    const fastStage = this.stage === 'boot' || this.stage === 'manual-stream'
+    const speed = fastStage ? this.charsPerSecond : this.terminalCharsPerSecond
+    this.outputCharAccumulator += Math.max(0, dt) * speed
+    const count = Math.min(this.pendingOutput.length, Math.floor(this.outputCharAccumulator))
+    if (count <= 0) return
+
+    this.transcript += this.pendingOutput.slice(0, count)
+    this.pendingOutput = this.pendingOutput.slice(count)
+    this.outputCharAccumulator -= count
+
+    // Do not bank unused typing time while the queue is empty; otherwise the
+    // next short command could appear all at once.
+    if (this.pendingOutput.length === 0) this.outputCharAccumulator = 0
+  }
 
   private appendLines(lines: string[]): void {
 
