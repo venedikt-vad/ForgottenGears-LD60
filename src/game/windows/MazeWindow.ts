@@ -97,8 +97,8 @@ function adjacent(a: MazeCell, b: MazeCell): boolean {
  * layout file and looks uniform until Q sends a scan wave out from the cursor;
  * the mouse-drawn route comes later.
  */
-export class NewMinigameWindow implements GameWindow {
-  readonly id = 'newMinigame'
+export class WindowMaze implements GameWindow {
+  readonly id = 'maze'
 
   private manager: WindowManager | null = null
   private language: GameLanguage = 'ru'

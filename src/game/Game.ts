@@ -13,6 +13,7 @@ import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
 
 import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem } from './VirtualFileSystem'
+import { WindowMaze } from './windows/MazeWindow'
 
 export type GameOptions = {
   canvas: HTMLCanvasElement
@@ -95,6 +96,7 @@ export class Game {
     const memoryCore = new MemoryCoreWindow()
     const powerDistribution = new PowerDistributionWindow()
     this.powerDistribution = powerDistribution
+    const maze = new WindowMaze()
 
     // Register every game window, including the code editor.
     this.windows
@@ -105,11 +107,12 @@ export class Game {
       .register(reactor)
       .register(memoryCore)
       .register(powerDistribution)
+      .register(maze)
 
     // First screen shown when the game starts.
     // this.windows.show('language')
 
-    this.windows.show('powerDistribution')
+    this.windows.show('maze')
   }
 
   start() {
