@@ -27,12 +27,11 @@ const TILE_IDLE: MazeCellStyle = {
 const TILE_START: MazeCellStyle = {
   background: 'rgba(120, 88, 18, 0.5)', border: '#ffd27a', glyph: '#fff3d4', glow: 'rgba(255, 215, 140, 0.7)',
 }
-// Scanned tiles are kept bright enough to read on a dim screen.
 const TILE_WALL: MazeCellStyle = {
-  background: 'rgba(168, 34, 16, 0.95)', border: '#ff8a62', glyph: '#ffe2d6', glow: 'rgba(255, 120, 80, 0.6)',
+  background: 'rgba(90, 20, 10, 0.55)', border: '#8c3a24', glyph: '#ff9a7a', glow: null,
 }
 const TILE_PATH: MazeCellStyle = {
-  background: 'rgba(28, 126, 46, 0.95)', border: '#7bea86', glyph: '#e6ffdc', glow: 'rgba(130, 255, 160, 0.6)',
+  background: 'rgba(20, 60, 24, 0.55)', border: '#3c7a3a', glyph: '#9fe08a', glow: null,
 }
 const TILE_ROUTE: MazeCellStyle = {
   background: 'rgba(26, 96, 40, 0.92)', border: '#5fd06a', glyph: '#dcffd2', glow: 'rgba(120, 255, 150, 0.45)',

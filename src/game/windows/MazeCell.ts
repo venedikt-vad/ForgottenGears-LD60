@@ -182,7 +182,7 @@ export class MazeCell {
     }
 
     // A fading scan stays readable a little longer than a linear ramp would.
-    const strength = Math.pow(this.lit, 0.45)
+    const strength = Math.pow(this.lit, 0.6)
 
     // The idle layer is pulled back as the color comes up, so the color stays clean.
     this.paint(ctx, left, top, side, styles.idle, alpha * (1 - strength * 0.9))
