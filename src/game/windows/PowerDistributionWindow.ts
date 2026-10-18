@@ -170,10 +170,10 @@ type LinePoint = {
 
 // Sink order defines the OUTPUT numbers shown on the board and in the side list.
 const SYSTEMS = [
-  'LEFT LEG',
+  'RIGHT ARM',
   'RIGHT LEG',
   'LEFT ARM',
-  'RIGHT ARM',
+  'LEFT LEG',
   'RADIO TRANSMITTER',
 ]
 
