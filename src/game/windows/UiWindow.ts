@@ -90,6 +90,10 @@ const APPEAR_ITEM_ROW = 0.18
 const APPEAR_ITEM_STAGGER_CAP = 12
 const APPEAR_TOTAL = APPEAR_ITEMS_START + APPEAR_ITEM_STAGGER_CAP * APPEAR_ITEM_STAGGER + APPEAR_ITEM_ROW
 
+// Damaged rows blink a red border: on for most of the period, brief pause.
+const DAMAGE_BLINK_PERIOD = 0.9
+const DAMAGE_BLINK_ON = 0.6
+
 function clamp01(value: number): number {
   return value <= 0 ? 0 : value >= 1 ? 1 : value
 }
@@ -115,6 +119,7 @@ export class UiWindow implements GameWindow {
   private message = ''
   private appearTime = APPEAR_TOTAL
   private openedThisFrame = false
+  private blinkClock = 0
 
   private bodyImg: ImageDrawer | null = null
   private readonly schemeImage = new Image()
@@ -166,6 +171,7 @@ export class UiWindow implements GameWindow {
 
   update(dt: number, input: Input): void {
     this.appearTime += dt
+    this.blinkClock += dt
 
     // Accumulate history data points over time.
     this.historyTimer += dt
@@ -544,6 +550,20 @@ export class UiWindow implements GameWindow {
         ctx.fillRect(rowRect.x, rowRect.y, rowRect.width, rowRect.height)
         ctx.strokeStyle = COLORS.borderBright
         ctx.strokeRect(rowRect.x + 0.5, rowRect.y + 0.5, rowRect.width - 1, rowRect.height - 1)
+      }
+
+      // Damaged entries draw a red border that blinks on and off.
+      if (
+        toUiStatus(component.status) === 'damaged' &&
+        this.blinkClock % DAMAGE_BLINK_PERIOD < DAMAGE_BLINK_ON
+      ) {
+        ctx.save()
+        ctx.strokeStyle = COLORS.redBright
+        ctx.lineWidth = 1.5
+        ctx.shadowColor = 'rgba(255, 52, 72, 0.7)'
+        ctx.shadowBlur = 6
+        ctx.strokeRect(rowRect.x + 0.5, rowRect.y + 0.5, rowRect.width - 1, rowRect.height - 1)
+        ctx.restore()
       }
 
       ctx.font = font
