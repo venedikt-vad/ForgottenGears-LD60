@@ -773,7 +773,7 @@ export class ConsoleWindow implements GameWindow {
 
   private getCommandNames(): string[] {
     // Keep help and command completion limited to the seven requested commands.
-    return ['help', 'components', 'ui', 'status', 'vim', 'manual', 'clear']
+    return ['help', 'components', 'ui', 'status', 'vim', 'manual', 'clear', 'start']
   }
 
   private clearCompletionState(): void {
@@ -800,6 +800,7 @@ export class ConsoleWindow implements GameWindow {
               '  vim [путь] — открыть редактор',
               '  manual     — инструкция оператора',
               '  clear      — полностью очистить экран консоли',
+              '  start      — запуск робота; при отказе выводятся блокирующие проблемы.',
               '',
               'УПРАВЛЕНИЕ: ↑/↓ — история команд; TAB — автодополнение.',
               '',
@@ -813,6 +814,7 @@ export class ConsoleWindow implements GameWindow {
               '  vim [path] — open editor',
               '  manual     — operator manual',
               '  clear      — clear the console screen completely',
+              '  start      — start the robot; blocking faults are listed if startup is refused.',
               '',
               'CONTROLS: ↑/↓ — command history; TAB — autocomplete.',
               '',
