@@ -1,5 +1,6 @@
 import type { Input, InputKeyEvent } from '../Input'
 import { FONT_FAMILY } from '../fonts'
+import { playSfx } from '../sfx'
 import { VirtualFileSystem } from '../VirtualFileSystem'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
@@ -933,6 +934,7 @@ export class CodeEditorWindow implements GameWindow {
     if (valid) {
       this.checkedBufferText = text
       this.checkResult = { ok: true, detail: '', text: this.checkedBufferText }
+      playSfx('correct')
       this.setMessage(this.language === 'ru' ? 'КОМАНДА ПРИНЯТА. СОХРАНЕНИЕ АВТОМАТИЧЕСКОЕ.' : 'COMMAND ACCEPTED. SAVING IS AUTOMATIC.')
     } else {
       this.checkedBufferText = null
@@ -941,6 +943,7 @@ export class CodeEditorWindow implements GameWindow {
         detail: this.language === 'ru' ? `ВВЕДИТЕ ОДНУ КОМАНДУ: ${RESTORE_COMMAND}` : `ENTER ONE COMMAND: ${RESTORE_COMMAND}`,
         text: this.buffer.join('\n'),
       }
+      playSfx('incorrect')
       this.onValidate?.(this.currentPath, false)
     }
   }

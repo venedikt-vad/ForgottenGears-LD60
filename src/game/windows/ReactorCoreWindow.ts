@@ -1,4 +1,5 @@
 import { FONT_FAMILY } from '../fonts'
+import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
@@ -276,6 +277,7 @@ export class ReactorCoreWindow implements GameWindow {
   private activeRing: number | null = null
   private wasPointerDown = false
   private solved = false
+  private wasSolved = false
   private time = 0
   private appearTime = APPEAR_TOTAL
   private cx = 0
@@ -304,6 +306,12 @@ export class ReactorCoreWindow implements GameWindow {
     this.time += dt
     if (this.appearTime < APPEAR_TOTAL) {
       this.appearTime = Math.min(APPEAR_TOTAL, this.appearTime + dt)
+    }
+
+    // The solve lands during render; announce it on the next frame.
+    if (this.solved && !this.wasSolved) {
+      this.wasSolved = true
+      playSfx('correct')
     }
 
     // Reactor does not scroll; discard wheel input so it never builds up.

@@ -1,5 +1,6 @@
 import { FONT_FAMILY } from '../fonts'
 import { ImageDrawer } from '../ImageDrawer'
+import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { RobotSystem, RuntimeComponent, RuntimeStatus } from '../Game'
 import type { GameLanguage, GameWindow } from './GameWindow'
@@ -449,6 +450,7 @@ export class UiWindow implements GameWindow {
   }
 
   private selectPart(part: BodyPart): void {
+    if (part !== this.selectedPart) playSfx('selection')
     this.selectedPart = part
     this.scrollTop = 0
     this.visibleComponents = this.getFilteredComponents()
@@ -469,7 +471,9 @@ export class UiWindow implements GameWindow {
       return
     }
     const currentIndex = this.selectedIndex < 0 ? 0 : this.selectedIndex
-    this.selectedIndex = Math.max(0, Math.min(components.length - 1, currentIndex + amount))
+    const next = Math.max(0, Math.min(components.length - 1, currentIndex + amount))
+    if (next !== this.selectedIndex) playSfx('selection')
+    this.selectedIndex = next
     this.message = ''
   }
 
@@ -1140,6 +1144,7 @@ export class UiWindow implements GameWindow {
       if (!includesPoint(row.rect, x, y)) continue
       const index = this.visibleComponents.findIndex((item) => item.id === row.id)
       if (index >= 0) {
+        if (index !== this.selectedIndex) playSfx('selection')
         this.selectedIndex = index
         this.message = ''
       }

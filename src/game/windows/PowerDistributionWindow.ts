@@ -1,4 +1,5 @@
 import { FONT_FAMILY } from '../fonts'
+import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
@@ -204,6 +205,9 @@ export class PowerDistributionWindow implements GameWindow {
   private prevPowered: boolean[] = []
   private blink: number[] = []
   private appearTime = APPEAR_TOTAL
+  // Baselines for the connected / disconnected / power-loss sound edges.
+  private prevOutputsOnline = 0
+  private prevOverCapacity = false
 
   // Background diagonals: last known canvas size plus the sliding square points.
   private bgWidth = 0
@@ -237,6 +241,8 @@ export class PowerDistributionWindow implements GameWindow {
     this.powered = this.computePowered()
     this.prevPowered = this.powered.slice()
     this.blink = new Array<number>(this.powered.length).fill(0)
+    this.prevOutputsOnline = this.outputsPowered
+    this.prevOverCapacity = this.powerOverCapacity
   }
 
   /**
@@ -303,6 +309,14 @@ export class PowerDistributionWindow implements GameWindow {
     }
 
     this.advancePower(dt)
+
+    // Sound edges: outputs coming online / dropping off, and the brownout.
+    const online = this.outputsPowered
+    if (online > this.prevOutputsOnline) playSfx('connected')
+    else if (online < this.prevOutputsOnline) playSfx('disconnected')
+    this.prevOutputsOnline = online
+    if (this.powerOverCapacity && !this.prevOverCapacity) playSfx('power_loss')
+    this.prevOverCapacity = this.powerOverCapacity
   }
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
@@ -881,6 +895,7 @@ export class PowerDistributionWindow implements GameWindow {
 
   private rotate(index: number): void {
     this.masks[index] = rotateMask(this.masks[index])
+    playSfx('selection')
   }
 
   private indexAt(x: number, y: number): number {
