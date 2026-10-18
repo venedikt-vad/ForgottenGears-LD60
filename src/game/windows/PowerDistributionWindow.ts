@@ -176,11 +176,15 @@ const SYSTEMS = [
   'RADIO TRANSMITTER',
 ]
 
+// Win pattern: outputs 2, 3 and 4 feed their systems; outputs 1 and 5 stay dark.
+// (1-based output numbers follow the OUTPUT legend order.)
+const TARGET_OUTPUTS = [false, true, true, true, false]
+
 /**
  * A cyan power-distribution screen: one fixed source feeds three sinks. A grid of
  * rotatable pipe fittings sits between them; a fitting is live only while power
- * reaches it from the source. Solved when all three sinks are powered and pointed
- * outward.
+ * reaches it from the source. Solved when outputs 2, 3 and 4 are powered and
+ * outputs 1 and 5 stay off.
  */
 export class PowerDistributionWindow implements GameWindow {
   readonly id = 'powerDistribution'
@@ -887,9 +891,18 @@ export class PowerDistributionWindow implements GameWindow {
     return row * COLS + col
   }
 
-  /** True when every sink is powered from the source and faces outward. */
+  /**
+   * True when the live outputs match the win pattern: outputs 2, 3 and 4 powered,
+   * outputs 1 and 5 off (1-based numbers from the OUTPUT legend).
+   */
   private get solved(): boolean {
-    return this.outputsPowered === this.sinks.length && this.sinks.length > 0
+    if (this.sinkIndices.length !== TARGET_OUTPUTS.length) return false
+    for (let i = 0; i < this.sinkIndices.length; i += 1) {
+      const index = this.sinkIndices[i]
+      const on = this.powered[index] && (this.masks[index] & this.sinks[i].bit) !== 0
+      if (on !== TARGET_OUTPUTS[i]) return false
+    }
+    return true
   }
 
   private get outputsPowered(): number {

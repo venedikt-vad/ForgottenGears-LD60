@@ -730,21 +730,18 @@ export class UiWindow implements GameWindow {
       ? [
           '1. Починить реактор',
           '2. Подать питание на компоненты движения',
-          '3. Попробовать запустить',
+          '3. Восстановить обход шины',
           '4. Починить память',
-          '5. Попробовать запустить',
-          '6. Починить алгоритм',
-          '7. Попробовать запустить',
+          '5. Починить алгоритм',
         ]
       : [
           '1. Repair the reactor',
           '2. Power motion components',
-          '3. Attempt startup',
+          '3. Restore the bus bypass',
           '4. Repair memory',
-          '5. Attempt startup',
-          '6. Repair the algorithm',
-          '7. Attempt startup',
+          '5. Repair the algorithm',
         ]
+    const doneFlags = this.checklistDone()
 
     ctx.save()
     ctx.beginPath()
@@ -779,11 +776,28 @@ export class UiWindow implements GameWindow {
       const y = rect.y + titleHeight + index * taskLineHeight
       ctx.save()
       ctx.globalAlpha = itemProgress
+      // Tasks whose puzzle is solved read green.
+      ctx.fillStyle = doneFlags[index] ? COLORS.green : COLORS.bright
       ctx.fillText(task, rect.x + pad, y, contentWidth)
       ctx.restore()
     })
 
     ctx.restore()
+  }
+
+  /** Live win state for each recovery task, read from the matching puzzle window. */
+  private checklistDone(): boolean[] {
+    const reactor = this.manager?.get('reactor') as unknown as { solved?: boolean } | undefined
+    const power = this.manager?.get('powerDistribution') as unknown as { solved?: boolean } | undefined
+    const maze = this.manager?.get('maze') as unknown as { isSolved?: boolean } | undefined
+    const memory = this.manager?.get('memoryCore') as unknown as { isSolved?: boolean } | undefined
+    return [
+      reactor?.solved ?? false,
+      power?.solved ?? false,
+      maze?.isSolved ?? false,
+      memory?.isSolved ?? false,
+      this.robotSystem.motionProfileRestored,
+    ]
   }
 
   private drawBodyDiagram(ctx: CanvasRenderingContext2D, rect: Rect, font: string, smallFont: string, lineHeight: number): void {
