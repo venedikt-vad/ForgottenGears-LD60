@@ -416,24 +416,33 @@ export class MemoryCoreWindow implements GameWindow {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
 
+    // The selected right-table cell counts the header letter wherever it appears
+    // in the focused row or column — those symbols light up green.
+    const header = this.rowHeaders[this.focusRow] ?? ''
+
     for (let index = 0; index < this.leftSymbols.length; index += 1) {
       const shown = reveal(appear.time, hash01(index * 1.13) * APPEAR_SYMBOL, APPEAR_SYMBOL_START)
       if (shown <= 0) continue
 
+      const symbol = this.leftSymbols[index]
       const column = index % grid.columns
       const row = Math.floor(index / grid.columns)
       const centerX = grid.x + column * grid.cellWidth + grid.cellWidth / 2
       const centerY = grid.y + row * grid.cellHeight + grid.cellHeight / 2
       const lit = row === this.focusRow || column === this.focusCol
+      const counted = lit && symbol === header
 
       ctx.globalAlpha = shown
       ctx.font = `${Math.round(glyphSize * (0.5 + 0.5 * shown))}px "${LOST_LANGUAGE_FAMILY}", monospace`
-      ctx.fillStyle = lit ? COLORS.bright : COLORS.text
-      if (lit) {
+      ctx.fillStyle = counted ? COLORS.correct : lit ? COLORS.bright : COLORS.text
+      if (counted) {
+        ctx.shadowColor = COLORS.correct
+        ctx.shadowBlur = 6
+      } else if (lit) {
         ctx.shadowColor = COLORS.glow
         ctx.shadowBlur = 4
       }
-      ctx.fillText(this.leftSymbols[index], centerX, centerY)
+      ctx.fillText(symbol, centerX, centerY)
       if (lit) ctx.shadowBlur = 0
     }
     ctx.globalAlpha = 1
