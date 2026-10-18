@@ -132,16 +132,16 @@ export class VictoryWindow implements GameWindow {
     ctx.restore()
   }
 
-  /** Plays the endgame cinematic; `ended` keeps it paused on the last frame. */
+  /** Plays the endgame cinematic on repeat for as long as the window is shown. */
   private startVideo(): void {
     if (!this.video) {
       const video = document.createElement('video')
       video.src = ENDGAME_VIDEO
       video.playsInline = true
       video.preload = 'auto'
+      video.loop = true
       // Off-screen: its frames are copied into the canvas on every render.
       video.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;pointer-events:none'
-      video.addEventListener('ended', () => video.pause())
       document.body.appendChild(video)
       this.video = video
     }
