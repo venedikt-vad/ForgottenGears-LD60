@@ -12,9 +12,11 @@ type ComponentRow = { id: string; rect: Rect }
 type BodyHotspot = { part: Exclude<BodyPart, 'ALL'>; rect: Rect }
 
 const COLORS = {
-  background: '#050b07',
-  panel: 'rgba(7, 23, 13, 0.94)',
-  panelAlt: 'rgba(12, 34, 19, 0.95)',
+  // Translucent on purpose: the blurred glow layer sits below the game canvas
+  // and must stay visible through the UI surfaces.
+  background: 'rgba(5, 11, 7, 0.42)',
+  panel: 'rgba(7, 23, 13, 0.72)',
+  panelAlt: 'rgba(12, 34, 19, 0.78)',
   border: '#376d42',
   borderBright: '#89f5a4',
   grid: 'rgba(83, 158, 98, 0.13)',
@@ -27,7 +29,7 @@ const COLORS = {
   yellow: '#ffd166',
   red: '#ff3448',
   redBright: '#ff7782',
-  redDark: '#8e1422',
+  redDark: 'rgba(142, 20, 34, 0.82)',
   gray: '#a0afa4',
 }
 
@@ -73,6 +75,29 @@ function includesPoint(rect: Rect, x: number, y: number): boolean {
   return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
 }
 
+// Opening animation timings (seconds): panel borders scale from the center in
+// all directions, rules and graphs stretch from start to end, text types itself
+// in, then list items show up one after another.
+const APPEAR_FRAME = 0.45
+const APPEAR_RULE_START = 0.3
+const APPEAR_RULE = 0.35
+const APPEAR_TEXT_START = 0.35
+const APPEAR_TEXT = 0.8
+const APPEAR_ITEMS_START = 0.5
+const APPEAR_ITEM_STAGGER = 0.05
+const APPEAR_ITEM_ROW = 0.18
+// Items past this one share the delay so long lists never drag the reveal out.
+const APPEAR_ITEM_STAGGER_CAP = 12
+const APPEAR_TOTAL = APPEAR_ITEMS_START + APPEAR_ITEM_STAGGER_CAP * APPEAR_ITEM_STAGGER + APPEAR_ITEM_ROW
+
+function clamp01(value: number): number {
+  return value <= 0 ? 0 : value >= 1 ? 1 : value
+}
+
+function easeOut(t: number): number {
+  return 1 - (1 - t) * (1 - t)
+}
+
 /**
  * BIOS-style maintenance utility. The shared RobotSystem stays owned by Game.ts;
  * this window only reads it and asks WindowManager to open existing service windows.
@@ -88,6 +113,8 @@ export class UiWindow implements GameWindow {
   private scrollTop = 0
   private wasPointerDown = false
   private message = ''
+  private appearTime = APPEAR_TOTAL
+  private openedThisFrame = false
 
   private bodyImg: ImageDrawer | null = null
   private readonly schemeImage = new Image()
@@ -117,6 +144,9 @@ export class UiWindow implements GameWindow {
   onShow(manager: WindowManager): void {
     this.manager = manager
     this.wasPointerDown = false
+    // Replay the appear animation each time the window is opened.
+    this.appearTime = 0
+    this.openedThisFrame = true
     this.bodyImg = new ImageDrawer({
       image: this.schemeImage,
       beginTime: performance.now(),
@@ -135,6 +165,8 @@ export class UiWindow implements GameWindow {
   }
 
   update(dt: number, input: Input): void {
+    this.appearTime += dt
+
     // Accumulate history data points over time.
     this.historyTimer += dt
     if (this.historyTimer >= 0.15) {
@@ -162,6 +194,20 @@ export class UiWindow implements GameWindow {
       return
     }
 
+    const keyEvents = input.getPressedKeyEvents()
+    const down = input.isPointerDown()
+
+    // Input is locked while the opening animation plays. Any later key or click
+    // skips it; the input that opened the window cannot skip its own animation.
+    if (this.appearTime < APPEAR_TOTAL) {
+      if (down && !this.wasPointerDown) this.appearTime = APPEAR_TOTAL
+      else if (!this.openedThisFrame && keyEvents.length) this.appearTime = APPEAR_TOTAL
+      this.openedThisFrame = false
+      this.wasPointerDown = down
+      return
+    }
+    this.openedThisFrame = false
+
     // Quick filters for body regions; 0 returns to the complete component registry.
     const digitPart: Record<string, BodyPart> = {
       Digit1: 'HEAD', Digit2: 'LEFT_ARM', Digit3: 'RIGHT_ARM',
@@ -183,7 +229,6 @@ export class UiWindow implements GameWindow {
     if (input.wasPressed('Enter') || input.wasPressed('KeyO')) this.openSelectedComponent()
     if (input.wasPressed('KeyP')) this.openPowerRedistribution()
 
-    const down = input.isPointerDown()
     if (down && !this.wasPointerDown) {
       const p = input.pointerPosition
       this.handlePointer(p.x, p.y)
@@ -209,7 +254,7 @@ export class UiWindow implements GameWindow {
     ctx.textBaseline = 'top'
     this.drawGlowText(
       ctx,
-      this.language === 'ru' ? 'УТИЛИТА ОБСЛУЖИВАНИЯ РОБОТА' : 'ROBOT MAINTENANCE UTILITY',
+      this.written(this.language === 'ru' ? 'УТИЛИТА ОБСЛУЖИВАНИЯ РОБОТА' : 'ROBOT MAINTENANCE UTILITY'),
       margin,
       margin,
       titleFont,
@@ -224,16 +269,16 @@ export class UiWindow implements GameWindow {
       : `NORMAL ${counts.normal}   DISABLED ${counts.disabled}   DAMAGED ${counts.damaged}`
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
-    ctx.fillText('SERVICE MODE / LIVE COMPONENT STATE', margin, margin + lineHeight * 1.25)
+    ctx.fillText(this.written('SERVICE MODE / LIVE COMPONENT STATE'), margin, margin + lineHeight * 1.25)
 
     const compactHeader = width < 720
     if (compactHeader) {
       ctx.fillStyle = COLORS.text
-      ctx.fillText(this.fitText(ctx, countText, width - margin * 2), margin, margin + lineHeight * 2.05)
+      ctx.fillText(this.fitText(ctx, this.written(countText), width - margin * 2), margin, margin + lineHeight * 2.05)
     } else {
       ctx.textAlign = 'right'
       ctx.fillStyle = COLORS.text
-      ctx.fillText(this.fitText(ctx, countText, Math.max(80, width * 0.52)), width - margin, margin + lineHeight * 1.25)
+      ctx.fillText(this.fitText(ctx, this.written(countText), Math.max(80, width * 0.52)), width - margin, margin + lineHeight * 1.25)
       ctx.textAlign = 'left'
     }
 
@@ -326,7 +371,7 @@ export class UiWindow implements GameWindow {
     const footerHelp = this.language === 'ru'
       ? '1–6: ЧАСТЬ ТЕЛА  ·  0: ВСЕ  ·  ↑/↓: КОМПОНЕНТ  ·  ENTER: ОТЛАДКА  ·  P: ПИТАНИЕ  ·  ESC: КОНСОЛЬ'
       : '1–6: BODY PART  ·  0: ALL  ·  ↑/↓: COMPONENT  ·  ENTER: DEBUG  ·  P: POWER  ·  ESC: CONSOLE'
-    ctx.fillText(this.fitText(ctx, footerHelp, width - margin * 2), margin, height - margin - lineHeight)
+    ctx.fillText(this.fitText(ctx, this.written(footerHelp), width - margin * 2), margin, height - margin - lineHeight)
 
     ctx.restore()
   }
@@ -437,27 +482,27 @@ export class UiWindow implements GameWindow {
     const titleY = rect.y + 7
     ctx.font = titleFont
     ctx.fillStyle = COLORS.text
-    ctx.fillText(this.language === 'ru' ? 'РЕЕСТР КОМПОНЕНТОВ' : 'COMPONENT REGISTRY', rect.x + pad, titleY)
+    ctx.fillText(this.written(this.language === 'ru' ? 'РЕЕСТР КОМПОНЕНТОВ' : 'COMPONENT REGISTRY'), rect.x + pad, titleY)
 
     const partTitle = this.selectedPart === 'ALL'
       ? (this.language === 'ru' ? 'ВСЕ ПОДСИСТЕМЫ' : 'ALL SUBSYSTEMS')
       : (PARTS.find((part) => part.id === this.selectedPart)?.title[this.language] ?? this.selectedPart)
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
-    ctx.fillText(this.fitText(ctx, partTitle, rect.width - pad * 2), rect.x + pad, titleY + lineHeight * 1.2)
+    ctx.fillText(this.fitText(ctx, this.written(partTitle), rect.width - pad * 2), rect.x + pad, titleY + lineHeight * 1.2)
 
     const tableHeaderY = titleY + lineHeight * 2.15
-    this.drawRule(ctx, rect.x + pad, tableHeaderY - 3, rect.width - pad * 2)
+    this.drawRule(ctx, rect.x + pad, tableHeaderY - 3, rect.width - pad * 2, 0.1)
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
     const idX = rect.x + pad
     const nameX = rect.x + pad + Math.min(91, Math.max(68, rect.width * 0.19))
     const statusW = Math.min(92, Math.max(72, rect.width * 0.21))
     const statusX = rect.x + rect.width - pad - statusW
-    ctx.fillText('ID', idX, tableHeaderY + 2)
-    ctx.fillText(this.language === 'ru' ? 'КОМПОНЕНТ' : 'COMPONENT', nameX, tableHeaderY + 2)
+    ctx.fillText(this.written('ID'), idX, tableHeaderY + 2)
+    ctx.fillText(this.written(this.language === 'ru' ? 'КОМПОНЕНТ' : 'COMPONENT'), nameX, tableHeaderY + 2)
     ctx.textAlign = 'right'
-    ctx.fillText(this.language === 'ru' ? 'СОСТОЯНИЕ' : 'STATE', rect.x + rect.width - pad, tableHeaderY + 2)
+    ctx.fillText(this.written(this.language === 'ru' ? 'СОСТОЯНИЕ' : 'STATE'), rect.x + rect.width - pad, tableHeaderY + 2)
     ctx.textAlign = 'left'
 
     const rowsTop = tableHeaderY + lineHeight * 1.05
@@ -486,6 +531,14 @@ export class UiWindow implements GameWindow {
       const rowRect: Rect = { x: rect.x + 5, y: y - 1, width: rect.width - 10, height: rowHeight }
       this.componentRows.push({ id: component.id, rect: rowRect })
 
+      // Rows fade and slide in one after another while the window opens.
+      const rowProgress = this.itemProgress(row)
+      if (rowProgress <= 0) continue
+
+      ctx.save()
+      ctx.globalAlpha = rowProgress
+      ctx.translate((rowProgress - 1) * 10, 0)
+
       if (index === this.selectedIndex) {
         ctx.fillStyle = COLORS.selected
         ctx.fillRect(rowRect.x, rowRect.y, rowRect.width, rowRect.height)
@@ -506,6 +559,7 @@ export class UiWindow implements GameWindow {
       ctx.fillStyle = statusColor(component.status)
       ctx.fillText(statusLabel(component.status, this.language), rect.x + rect.width - pad, y + Math.max(0, (rowHeight - fontSize) / 2), statusW)
       ctx.textAlign = 'left'
+      ctx.restore()
     }
     ctx.restore()
 
@@ -513,7 +567,7 @@ export class UiWindow implements GameWindow {
       ctx.font = smallFont
       ctx.fillStyle = COLORS.dim
       ctx.textAlign = 'right'
-      ctx.fillText(`${this.scrollTop + 1}-${Math.min(this.scrollTop + visibleRows, this.visibleComponents.length)}/${this.visibleComponents.length}`, rect.x + rect.width - pad, rect.y + rect.height - graphsSectionHeight - graphsGap - lineHeight * 0.8)
+      ctx.fillText(this.written(`${this.scrollTop + 1}-${Math.min(this.scrollTop + visibleRows, this.visibleComponents.length)}/${this.visibleComponents.length}`), rect.x + rect.width - pad, rect.y + rect.height - graphsSectionHeight - graphsGap - lineHeight * 0.8)
       ctx.textAlign = 'left'
     }
 
@@ -552,11 +606,10 @@ export class UiWindow implements GameWindow {
       isDanger: boolean,
     ) => {
       if (subW <= 0 || subH <= 0) return
-      ctx.fillStyle = COLORS.panelAlt
-      ctx.fillRect(subX, subY, subW, subH)
-      ctx.strokeStyle = COLORS.border
-      ctx.strokeRect(subX + 0.5, subY + 0.5, Math.max(0, subW - 1), Math.max(0, subH - 1))
+      this.drawPanel(ctx, { x: subX, y: subY, width: subW, height: subH }, COLORS.panelAlt)
 
+      ctx.save()
+      ctx.globalAlpha = this.textProgress
       ctx.font = smallFont
       ctx.fillStyle = COLORS.dim
       ctx.fillText(this.fitText(ctx, title, subW - 36), subX + 6, subY + 4)
@@ -565,6 +618,7 @@ export class UiWindow implements GameWindow {
       ctx.fillStyle = isDanger ? COLORS.redBright : COLORS.bright
       ctx.fillText(`${Math.round(Math.max(0, Math.min(1, currentVal)) * 100)}%`, subX + subW - 6, subY + 4)
       ctx.textAlign = 'left'
+      ctx.restore()
 
       const plotX = subX + 6
       const plotY = subY + 18
@@ -572,9 +626,13 @@ export class UiWindow implements GameWindow {
       const plotH = subH - 22
       if (plotW <= 0 || plotH <= 0) return
 
+      // The plot stretches open from the start toward the end while opening.
+      const stretch = clamp01((this.appearTime - APPEAR_RULE_START) / APPEAR_RULE)
+      if (stretch <= 0) return
+
       ctx.save()
       ctx.beginPath()
-      ctx.rect(plotX, plotY, plotW, plotH)
+      ctx.rect(plotX, plotY, plotW * stretch, plotH)
       ctx.clip()
 
       ctx.strokeStyle = COLORS.grid
@@ -678,7 +736,7 @@ export class UiWindow implements GameWindow {
     ctx.textBaseline = 'top'
     ctx.fillStyle = COLORS.text
     const heading = this.language === 'ru' ? 'СДЕЛАТЬ:' : 'TODO:'
-    ctx.fillText(this.fitText(ctx, heading, rect.width - pad * 2), rect.x + pad, rect.y + 6)
+    ctx.fillText(this.written(this.fitText(ctx, heading, rect.width - pad * 2)), rect.x + pad, rect.y + 6)
 
     const contentWidth = Math.max(1, rect.width - pad * 2)
     const longestTask = Math.max(...tasks.map((task) => task.length))
@@ -695,8 +753,14 @@ export class UiWindow implements GameWindow {
     )
 
     tasks.forEach((task, index) => {
+      // Checklist items show up one after another while the window opens.
+      const itemProgress = this.itemProgress(index)
+      if (itemProgress <= 0) return
       const y = rect.y + titleHeight + index * taskLineHeight
+      ctx.save()
+      ctx.globalAlpha = itemProgress
       ctx.fillText(task, rect.x + pad, y, contentWidth)
+      ctx.restore()
     })
 
     ctx.restore()
@@ -707,7 +771,11 @@ export class UiWindow implements GameWindow {
     const pad = 9
     ctx.font = font
     ctx.fillStyle = COLORS.text
-    ctx.fillText(this.language === 'ru' ? 'СХЕМА КОРПУСА' : 'BODY SCHEMATIC', rect.x + pad, rect.y + 7)
+    ctx.fillText(this.written(this.language === 'ru' ? 'СХЕМА КОРПУСА' : 'BODY SCHEMATIC'), rect.x + pad, rect.y + 7)
+
+    // The schematic itself fades in with the written text.
+    ctx.save()
+    ctx.globalAlpha = this.textProgress
 
     const hintY = rect.y + rect.height - lineHeight - 6
     const top = rect.y + lineHeight * 1.7
@@ -790,12 +858,14 @@ export class UiWindow implements GameWindow {
     ctx.fillText(
       this.fitText(
         ctx,
-        this.language === 'ru' ? 'ЩЁЛКНИТЕ ПО ЧАСТИ ТЕЛА — СПИСОК СЛЕВА ОТРЕАГИРУЕТ' : 'CLICK A BODY PART TO FILTER THE COMPONENT LIST',
+        this.written(this.language === 'ru' ? 'ЩЁЛКНИТЕ ПО ЧАСТИ ТЕЛА — СПИСОК СЛЕВА ОТРЕАГИРУЕТ' : 'CLICK A BODY PART TO FILTER THE COMPONENT LIST'),
         rect.width - pad * 2,
       ),
       rect.x + pad,
       hintY,
     )
+
+    ctx.restore()
   }
 
   private drawFallbackRobot(ctx: CanvasRenderingContext2D, rect: Rect): void {
@@ -863,7 +933,7 @@ export class UiWindow implements GameWindow {
       ctx.textBaseline = 'top'
       ctx.fillStyle = COLORS.text
       ctx.fillText(
-        this.language === 'ru' ? 'КОМПОНЕНТ НЕ ВЫБРАН' : 'NO COMPONENT SELECTED',
+        this.written(this.language === 'ru' ? 'КОМПОНЕНТ НЕ ВЫБРАН' : 'NO COMPONENT SELECTED'),
         rect.x + pad,
         contentTop,
       )
@@ -875,21 +945,21 @@ export class UiWindow implements GameWindow {
     ctx.textBaseline = 'top'
     ctx.fillStyle = COLORS.bright
     const title = `${component.id} — ${component.name}`
-    ctx.fillText(this.fitText(ctx, title, rect.width - pad * 2 - 140), rect.x + pad, contentTop)
+    ctx.fillText(this.fitText(ctx, this.written(title), rect.width - pad * 2 - 140), rect.x + pad, contentTop)
 
     ctx.textAlign = 'right'
     ctx.fillStyle = statusColor(component.status)
-    ctx.fillText(statusLabel(component.status, this.language), rect.x + rect.width - pad, contentTop)
+    ctx.fillText(this.written(statusLabel(component.status, this.language)), rect.x + rect.width - pad, contentTop)
     ctx.textAlign = 'left'
 
     ctx.font = smallFont
     ctx.fillStyle = this.message ? COLORS.yellow : COLORS.text
     const fault = this.message || component.fault || (this.language === 'ru' ? 'Активных ошибок нет.' : 'No active fault.')
-    ctx.fillText(this.fitText(ctx, fault, rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 1.15)
+    ctx.fillText(this.fitText(ctx, this.written(fault), rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 1.15)
 
     ctx.fillStyle = COLORS.dim
     const recommendation = component.recommendation || (this.language === 'ru' ? 'Рекомендаций нет.' : 'No recommendation.')
-    ctx.fillText(this.fitText(ctx, recommendation, rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 2.05)
+    ctx.fillText(this.fitText(ctx, this.written(recommendation), rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 2.05)
 
     // Show debug action only for components that are not healthy.
     // Keep the hit area empty when hidden so it cannot be clicked invisibly.
@@ -951,7 +1021,7 @@ export class UiWindow implements GameWindow {
       ctx,
       powerButton,
       this.language === 'ru' ? 'ПЕРЕРАСПРЕДЕЛИТЬ ПИТАНИЕ' : 'REDISTRIBUTE POWER',
-      'rgba(55, 63, 18, 0.96)',
+      'rgba(55, 63, 18, 0.78)',
       COLORS.yellow,
       false,
       smallFont,
@@ -959,8 +1029,11 @@ export class UiWindow implements GameWindow {
   }
 
   private drawButton(ctx: CanvasRenderingContext2D, rect: Rect, label: string, fill: string, border: string, glow: boolean, font: string): void {
-    if (rect.width <= 0 || rect.height <= 0) return
+    // Buttons fade in together with the panel borders around them.
+    const appear = easeOut(clamp01(this.appearTime / APPEAR_FRAME))
+    if (rect.width <= 0 || rect.height <= 0 || appear <= 0) return
     ctx.save()
+    ctx.globalAlpha = appear
     ctx.fillStyle = fill
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
     ctx.strokeStyle = border
@@ -1056,11 +1129,23 @@ export class UiWindow implements GameWindow {
   }
 
   private drawPanel(ctx: CanvasRenderingContext2D, rect: Rect, fill = COLORS.panel): void {
+    // While the window opens the border scales from the center in all directions.
+    const progress = easeOut(clamp01(this.appearTime / APPEAR_FRAME))
+    if (rect.width <= 0 || rect.height <= 0 || progress <= 0) return
+
+    const drawnWidth = rect.width * progress
+    const drawnHeight = rect.height * progress
+    const x = rect.x + (rect.width - drawnWidth) / 2
+    const y = rect.y + (rect.height - drawnHeight) / 2
+
+    ctx.save()
+    ctx.globalAlpha = progress
     ctx.fillStyle = fill
-    ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-    ctx.strokeStyle = COLORS.border
+    ctx.fillRect(x, y, drawnWidth, drawnHeight)
+    ctx.strokeStyle = progress >= 1 ? COLORS.border : COLORS.borderBright
     ctx.lineWidth = 1
-    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, Math.max(0, rect.width - 1), Math.max(0, rect.height - 1))
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, drawnWidth - 1), Math.max(0, drawnHeight - 1))
+    ctx.restore()
   }
 
   private drawGlowText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, font: string, color: string, glow: string, blur: number): void {
@@ -1074,13 +1159,15 @@ export class UiWindow implements GameWindow {
     ctx.restore()
   }
 
-  private drawRule(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
-    if (width <= 0) return
+  private drawRule(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, delay = 0): void {
+    // While the window opens the rule stretches from its start toward its end.
+    const progress = clamp01((this.appearTime - APPEAR_RULE_START - delay) / APPEAR_RULE)
+    if (width <= 0 || progress <= 0) return
     ctx.strokeStyle = COLORS.border
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(Math.floor(x) + 0.5, Math.floor(y) + 0.5)
-    ctx.lineTo(Math.floor(x + width) + 0.5, Math.floor(y) + 0.5)
+    ctx.lineTo(Math.floor(x + width * progress) + 0.5, Math.floor(y) + 0.5)
     ctx.stroke()
   }
 
@@ -1090,5 +1177,24 @@ export class UiWindow implements GameWindow {
     let fitted = text
     while (fitted.length > 1 && ctx.measureText(`${fitted}…`).width > maxWidth) fitted = fitted.slice(0, -1)
     return `${fitted}…`
+  }
+
+  /** 0..1 reveal progress for the opening typewriter. */
+  private get textProgress(): number {
+    return clamp01((this.appearTime - APPEAR_TEXT_START) / APPEAR_TEXT)
+  }
+
+  /** 0..1 reveal progress of a list item whose staggered delay has just elapsed. */
+  private itemProgress(index: number): number {
+    const delay = Math.min(index, APPEAR_ITEM_STAGGER_CAP) * APPEAR_ITEM_STAGGER
+    return easeOut(clamp01((this.appearTime - APPEAR_ITEMS_START - delay) / APPEAR_ITEM_ROW))
+  }
+
+  /** Text revealed by the opening typewriter: a growing fraction of its length. */
+  private written(text: string): string {
+    const progress = this.textProgress
+    if (progress >= 1) return text
+    if (progress <= 0) return ''
+    return text.slice(0, Math.ceil(text.length * progress))
   }
 }

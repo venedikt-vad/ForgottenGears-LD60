@@ -363,6 +363,9 @@ export type GameOptions = {
   glowCanvas: HTMLCanvasElement
 }
 
+// Ambient soundtrack, looped for the whole session.
+const BACKGROUND_MUSIC = `${import.meta.env.BASE_URL}sound/Project_45.mp3`
+
 export class Game {
   readonly canvas: HTMLCanvasElement
   readonly ctx: CanvasRenderingContext2D
@@ -379,6 +382,7 @@ export class Game {
   private running = false
   private lastTime = 0
   private fontLoaded = false
+  private bgMusic: HTMLAudioElement | null = null
 
   private player = { x: 200, y: 200, size: 32, speed: 240 }
   private readonly onResize = () => this.resize()
@@ -441,7 +445,7 @@ export class Game {
       .register(maze)
 
     // The intended recovery walkthrough starts at the console, not at a puzzle.
-    this.windows.show('editor')
+    this.windows.show('ui')
   }
 
   start() {
@@ -452,6 +456,7 @@ export class Game {
       .then(() => { this.fontLoaded = true })
       .catch(() => { this.fontLoaded = true })
 
+    this.startBackgroundMusic()
     this.input.attach()
     this.cursor.attach(this.canvas)
     window.addEventListener('resize', this.onResize)
@@ -459,6 +464,31 @@ export class Game {
 
     this.lastTime = performance.now()
     requestAnimationFrame(this.loop)
+  }
+
+  /** Starts the looping background track; autoplay may need one user gesture. */
+  private startBackgroundMusic(): void {
+    if (!this.bgMusic) {
+      const music = new Audio(BACKGROUND_MUSIC)
+      music.loop = true
+      music.volume = 0.5
+      this.bgMusic = music
+    }
+
+    const music = this.bgMusic
+    const tryPlay = (): void => {
+      music.play()
+        .then(() => {
+          window.removeEventListener('pointerdown', tryPlay)
+          window.removeEventListener('keydown', tryPlay)
+        })
+        .catch(() => { /* Blocked until the player interacts; the listeners stay. */ })
+    }
+
+    tryPlay()
+    // Browsers usually block autoplay with sound until the first interaction.
+    window.addEventListener('pointerdown', tryPlay)
+    window.addEventListener('keydown', tryPlay)
   }
 
   stop() {
