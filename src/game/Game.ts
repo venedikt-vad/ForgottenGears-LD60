@@ -264,15 +264,14 @@ export class RobotSystem {
 
   /** Call after the startup program has passed validation and is executed. */
   completeBodyStartup(): boolean {
-    const ready = this.reactorRestored && this.bodyBusRestored && this.busBypassRestored && this.coolingRestored && this.motionProfileRestored && this.memoryCoreRestored
+    const ready = this.reactorRestored && this.bodyBusRestored && this.busBypassRestored && this.motionProfileRestored && this.memoryCoreRestored
     if (!ready) {
-      this.log('ERROR', 'BODY STARTUP', 'Startup blocked: one or more power, memory, profile, or cooling checks have not passed.')
+      this.log('ERROR', 'BODY STARTUP', 'Startup blocked: one or more power, memory, or profile checks have not passed.')
       return false
     }
     if (this.getComponentStatus('ARM-R-660') === 'MISSING' || this.getComponentStatus('LEG-L-670') === 'MISSING') {
-      this.log('WARN', 'BODY STARTUP', 'Control profile is ready, but missing physical assemblies prevent a full body test.')
-      this.updateMotionReadiness()
-      return false
+      // Missing assemblies no longer block startup; they only limit the body test.
+      this.log('WARN', 'BODY STARTUP', 'Control profile is ready, but missing physical assemblies limit the body test.')
     }
     this.motionStartupComplete = true
     this.setComponentStatus('RTS-711', 'ONLINE', 'Real-time scheduler initialized.', 'BODY STARTUP')

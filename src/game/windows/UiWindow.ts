@@ -779,22 +779,8 @@ export class UiWindow implements GameWindow {
     this.drawPanel(ctx, rect, COLORS.panelAlt)
 
     const pad = 7
-    const tasks = this.language === 'ru'
-      ? [
-          '1. Починить реактор',
-          '2. Подать питание на компоненты движения',
-          '3. Восстановить обход шины',
-          '4. Починить память',
-          '5. Починить алгоритм',
-        ]
-      : [
-          '1. Repair the reactor',
-          '2. Power motion components',
-          '3. Restore the bus bypass',
-          '4. Repair memory',
-          '5. Repair the algorithm',
-        ]
-    const doneFlags = this.checklistDone()
+    const checklist = this.getChecklist()
+    const tasks = checklist.map((task, index) => `${index + 1}. ${task.label}`)
 
     ctx.save()
     ctx.beginPath()
@@ -830,7 +816,7 @@ export class UiWindow implements GameWindow {
       ctx.save()
       ctx.globalAlpha = itemProgress
       // Tasks whose puzzle is solved read green.
-      ctx.fillStyle = doneFlags[index] ? COLORS.green : COLORS.bright
+      ctx.fillStyle = checklist[index].done ? COLORS.green : COLORS.bright
       ctx.fillText(task, rect.x + pad, y, contentWidth)
       ctx.restore()
     })
@@ -838,12 +824,39 @@ export class UiWindow implements GameWindow {
     ctx.restore()
   }
 
+  /**
+   * Recovery checklist in panel order with live win state. The console `start`
+   * command gates on this exact list, so both screens always agree.
+   */
+  getChecklist(manager?: WindowManager | null): { label: string; done: boolean }[] {
+    const labels = this.language === 'ru'
+      ? [
+          'Починить реактор',
+          'Подать питание на компоненты движения',
+          'Восстановить обход шины',
+          'Починить память',
+          'Починить алгоритм',
+        ]
+      : [
+          'Repair the reactor',
+          'Power motion components',
+          'Restore the bus bypass',
+          'Repair memory',
+          'Repair the algorithm',
+        ]
+    const done = this.checklistDone(manager)
+    return labels.map((label, index) => ({ label, done: done[index] ?? false }))
+  }
+
   /** Live win state for each recovery task, read from the matching puzzle window. */
-  private checklistDone(): boolean[] {
-    const reactor = this.manager?.get('reactor') as unknown as { solved?: boolean } | undefined
-    const power = this.manager?.get('powerDistribution') as unknown as { solved?: boolean } | undefined
-    const maze = this.manager?.get('maze') as unknown as { isSolved?: boolean } | undefined
-    const memory = this.manager?.get('memoryCore') as unknown as { isSolved?: boolean } | undefined
+  private checklistDone(manager?: WindowManager | null): boolean[] {
+    // The console queries this list while UiWindow is inactive; fall back to the
+    // caller's manager when this window has not been shown yet.
+    const windows = manager ?? this.manager
+    const reactor = windows?.get('reactor') as unknown as { solved?: boolean } | undefined
+    const power = windows?.get('powerDistribution') as unknown as { solved?: boolean } | undefined
+    const maze = windows?.get('maze') as unknown as { isSolved?: boolean } | undefined
+    const memory = windows?.get('memoryCore') as unknown as { isSolved?: boolean } | undefined
     return [
       reactor?.solved ?? false,
       power?.solved ?? false,

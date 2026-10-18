@@ -881,6 +881,43 @@ export class ConsoleWindow implements GameWindow {
     }
   }
 
+  /** The UI window's recovery checklist; falls back to the shared state flags. */
+  private recoveryChecklist(): { label: string; done: boolean }[] {
+    try {
+      const ui = this.manager?.get('ui') as unknown as { getChecklist?: (manager?: WindowManager | null) => { label: string; done: boolean }[] }
+      const tasks = ui?.getChecklist?.(this.manager)
+      if (tasks && tasks.length > 0) return tasks
+    } catch {
+      // UI window not registered; fall through to the shared state flags.
+    }
+
+    const system = this.robotSystem
+    const ru = this.language === 'ru'
+    const labels = ru
+      ? [
+          'Починить реактор',
+          'Подать питание на компоненты движения',
+          'Восстановить обход шины',
+          'Починить память',
+          'Починить алгоритм',
+        ]
+      : [
+          'Repair the reactor',
+          'Power motion components',
+          'Restore the bus bypass',
+          'Repair memory',
+          'Repair the algorithm',
+        ]
+    const done = [
+      system?.reactorRestored ?? false,
+      system?.powerGridPuzzleSolved ?? false,
+      system?.busBypassRestored ?? false,
+      system?.memoryCoreRestored ?? false,
+      system?.motionProfileRestored ?? false,
+    ]
+    return labels.map((label, index) => ({ label, done: done[index] ?? false }))
+  }
+
   private tryStartRobot(): void {
     const ru = this.language === 'ru'
     const system = this.robotSystem
@@ -899,37 +936,23 @@ export class ConsoleWindow implements GameWindow {
       return
     }
 
-    const checks: Array<{ ready: boolean; id: string; title: string; fallback: string }> = [
-      { ready: system.reactorRestored, id: 'PWR-100', title: ru ? 'РЕАКТОР НЕ ВОССТАНОВЛЕН' : 'REACTOR NOT RESTORED', fallback: ru ? 'Не завершена безопасная последовательность запуска реактора.' : 'The reactor safe-start sequence is incomplete.' },
-      { ready: system.bodyBusRestored, id: 'PDU-230', title: ru ? 'ПИТАНИЕ КОРПУСА НЕ ПОДАНО' : 'BODY POWER IS OFF', fallback: ru ? 'Шина BODY_MAIN не активирована.' : 'The BODY_MAIN rail has not been energized.' },
-      { ready: system.busBypassRestored, id: 'ACT-610', title: ru ? 'ОБХОД ШИНЫ ПРИВОДОВ НЕ ВОССТАНОВЛЕН' : 'ACTUATOR BUS BYPASS NOT RESTORED', fallback: ru ? 'Не подтверждена непрерывность обходной линии ACT-610.' : 'Continuity of the ACT-610 bypass has not been verified.' },
-      { ready: system.memoryCoreRestored, id: 'CPU-730', title: ru ? 'ПАМЯТЬ НЕ ПРОВЕРЕНА' : 'MEMORY NOT VALIDATED', fallback: ru ? 'Ядро памяти не прошло проверку целостности.' : 'Core memory has not passed integrity validation.' },
-      { ready: system.motionProfileRestored, id: 'MCM-740', title: ru ? 'АЛГОРИТМ ДВИЖЕНИЯ НЕ ВОССТАНОВЛЕН' : 'MOTION PROFILE NOT RESTORED', fallback: ru ? 'Профиль команд движения не прошёл проверку.' : 'The motion command profile has not passed validation.' },
-      { ready: system.coolingRestored, id: 'TMP-810', title: ru ? 'ОХЛАЖДЕНИЕ НЕ ПРОВЕРЕНО' : 'COOLING NOT VERIFIED', fallback: ru ? 'Запуск заблокирован термозащитой: проверьте контур охлаждения CLG-820.' : 'Thermal interlock blocks startup: verify cooling circuit CLG-820.' },
-    ]
+    // The gate is the same recovery checklist the UI window renders, so both
+    // screens can never disagree about what is left to do.
+    const checklist = this.recoveryChecklist()
+    const taskComponentIds = ['PWR-100', 'PDU-230', 'ACT-610', 'CPU-730', 'MCM-740']
 
     const blockers: string[] = []
-    for (const check of checks) {
-      if (check.ready) continue
-      const component = system.getComponent(check.id)
-      blockers.push(`- ${check.title}${component ? ` [${component.id}]` : ''}`)
+    checklist.forEach((task, index) => {
+      if (task.done) return
+      const component = system.getComponent(taskComponentIds[index] ?? '')
+      blockers.push(`- ${task.label.toUpperCase()}${component ? ` [${component.id}]` : ''}`)
       if (component?.fault) blockers.push(`    ${ru ? 'ТЕКУЩАЯ ОШИБКА' : 'CURRENT FAULT'}: ${component.fault}`)
       if (component?.recommendation) blockers.push(`    ${ru ? 'ДЕЙСТВИЕ' : 'ACTION'}: ${component.recommendation}`)
-      if (!component) blockers.push(`    ${check.fallback}`)
-    }
-
-    for (const id of ['ARM-R-660', 'LEG-L-670'] as const) {
-      const component = system.getComponent(id)
-      if (component?.status === 'MISSING') {
-        blockers.push(`- ${ru ? 'НЕ ОБНАРУЖЕН ФИЗИЧЕСКИЙ МОДУЛЬ' : 'PHYSICAL ASSEMBLY NOT DETECTED'} [${id}]`)
-        blockers.push(`    ${ru ? 'ТЕКУЩАЯ ОШИБКА' : 'CURRENT FAULT'}: ${component.fault}`)
-        blockers.push(`    ${ru ? 'ДЕЙСТВИЕ' : 'ACTION'}: ${component.recommendation}`)
-      }
-    }
+    })
 
     if (blockers.length > 0) {
       this.appendLines([
-        ru ? 'ЗАПУСК ОТКЛОНЁН: ОБНАРУЖЕНЫ БЛОКИРУЮЩИЕ НЕИСПРАВНОСТИ.' : 'START REFUSED: BLOCKING FAULTS DETECTED.',
+        ru ? 'ЗАПУСК ОТКЛОНЁН: ЗАДАЧИ ВОССТАНОВЛЕНИЯ НЕ ЗАВЕРШЕНЫ.' : 'START REFUSED: RECOVERY TASKS INCOMPLETE.',
         ru ? 'ТЕКУЩИЕ ПРИЧИНЫ:' : 'CURRENT BLOCKERS:',
         ...blockers,
         '',
@@ -940,7 +963,7 @@ export class ConsoleWindow implements GameWindow {
     }
 
     if (system.completeBodyStartup()) {
-      // Show the standalone victory window only after all launch interlocks pass.
+      // Every checklist task is green: clear the console and show the win screen.
       this.transcript = ''
       this.pendingOutput = ''
       this.outputCharAccumulator = 0
