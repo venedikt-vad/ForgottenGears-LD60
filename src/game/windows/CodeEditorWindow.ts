@@ -203,7 +203,6 @@ export class CodeEditorWindow implements GameWindow {
   private mode: EditorMode = 'NORMAL'
   private activePane: Pane = 'editor'
   private commandLine = ''
-  private lastCommand = ''
   private searchQuery = ''
   private searchMatches: Array<{ row: number; col: number }> = []
   private searchIndex = -1
@@ -484,7 +483,7 @@ export class CodeEditorWindow implements GameWindow {
         ctx.fillText(String(lineIndex + 1).padStart(3, ' '), codeX + 4 + gutterWidth - 4, y)
         ctx.textAlign = 'left'
       }
-      this.drawCodeLine(ctx, shown, textX, y, maxTextWidth, normalFont, tinyFont)
+        this.drawCodeLine(ctx, shown, textX, y, maxTextWidth, normalFont)
       if (textProgress < 1) continue
       if (isCurrent && this.mode === 'NORMAL' && this.blinkClock % 1.1 < 0.65) {
         const before = line.slice(0, this.cursorCol)
@@ -872,7 +871,6 @@ export class CodeEditorWindow implements GameWindow {
   }
   private executeEditorCommand(raw: string): void {
     if (!raw) return
-    this.lastCommand = raw
     const [command, ...rest] = raw.split(/\s+/)
     const argument = rest.join(' ').trim()
     switch ((command ?? '').toLowerCase()) {
@@ -1409,7 +1407,6 @@ export class CodeEditorWindow implements GameWindow {
     y: number,
     maxWidth: number,
     normalFont: string,
-    tinyFont: string,
   ): void {
     ctx.font = normalFont
     const value = this.fitText(ctx, line, maxWidth)

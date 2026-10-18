@@ -129,8 +129,6 @@ export class UiWindow implements GameWindow {
   private bodyHotspots: BodyHotspot[] = []
   private openButtonRect: Rect | null = null
   private powerButtonRect: Rect | null = null
-  private lastMainRect: Rect | null = null
-  private lastFooterRect: Rect | null = null
   private visibleComponents: RuntimeComponent[] = []
 
   // Rolling history samples for continuous line graphs (up to 40 samples each)
@@ -312,8 +310,6 @@ export class UiWindow implements GameWindow {
     const diagramWidth = showDiagram ? Math.min(availableWidth * 0.39, 470) : 0
     const listWidth = Math.max(0, availableWidth - diagramWidth - gap)
 
-    const mainRect: Rect = { x: margin, y: contentY, width: availableWidth, height: mainHeight }
-    this.lastMainRect = mainRect
     this.visibleComponents = this.getFilteredComponents()
     this.clampSelection()
 
@@ -349,9 +345,6 @@ export class UiWindow implements GameWindow {
         font,
       )
     }
-
-    const footerRect: Rect = { x: margin, y: footerY, width: availableWidth, height: footerHeight }
-    this.lastFooterRect = footerRect
 
     let detailsRect: Rect
     let powerRect: Rect | null = null
