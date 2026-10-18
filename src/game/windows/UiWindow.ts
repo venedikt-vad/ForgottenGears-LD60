@@ -321,20 +321,39 @@ export class UiWindow implements GameWindow {
 
     this.bodyHotspots = []
     if (showDiagram) {
+      // Tall power button under the schematic image.
+      const powerButtonHeight = Math.max(30, lineHeight * 1.7)
       const diagramRect: Rect = {
         x: margin + listWidth + gap,
         y: contentY,
         width: diagramWidth,
-        height: mainHeight,
+        height: Math.max(120, mainHeight - powerButtonHeight - 10),
       }
       this.drawBodyDiagram(ctx, diagramRect, font, smallFont, lineHeight)
+
+      const powerButton: Rect = {
+        x: diagramRect.x,
+        y: contentY + mainHeight - powerButtonHeight,
+        width: diagramWidth,
+        height: powerButtonHeight,
+      }
+      this.powerButtonRect = powerButton
+      this.drawButton(
+        ctx,
+        powerButton,
+        this.language === 'ru' ? 'ПЕРЕРАСПРЕДЕЛИТЬ ПИТАНИЕ' : 'REDISTRIBUTE POWER',
+        'rgba(55, 63, 18, 0.78)',
+        COLORS.yellow,
+        false,
+        font,
+      )
     }
 
     const footerRect: Rect = { x: margin, y: footerY, width: availableWidth, height: footerHeight }
     this.lastFooterRect = footerRect
 
     let detailsRect: Rect
-    let powerRect: Rect
+    let powerRect: Rect | null = null
 
     if (compactFooter) {
       // Narrow layout: details and power controls use their own stacked panels.
@@ -350,8 +369,16 @@ export class UiWindow implements GameWindow {
         width: availableWidth,
         height: powerHeight,
       }
+    } else if (showDiagram) {
+      // With the body image on screen the power button lives under the schematic.
+      detailsRect = {
+        x: margin,
+        y: footerY,
+        width: availableWidth,
+        height: footerHeight,
+      }
     } else {
-      // Wide layout: the power panel is separate and positioned to the right.
+      // Wide layout without the image: the power panel sits to the right.
       const footerGap = 10
       const powerWidth = Math.min(250, Math.max(190, Math.floor(availableWidth * 0.28)))
       const detailsWidth = Math.max(0, availableWidth - powerWidth - footerGap)
@@ -370,7 +397,7 @@ export class UiWindow implements GameWindow {
     }
 
     this.drawDetailsAndActions(ctx, detailsRect, font, smallFont, lineHeight)
-    this.drawPowerPanel(ctx, powerRect, font, smallFont, lineHeight)
+    if (powerRect) this.drawPowerPanel(ctx, powerRect, font, smallFont, lineHeight)
 
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
@@ -514,7 +541,9 @@ export class UiWindow implements GameWindow {
     const rowsTop = tableHeaderY + lineHeight * 1.05
     const graphPanelHeight = 72
     const graphsGap = 8
-    const graphsSectionHeight = graphPanelHeight * 2 + graphsGap
+    // Tall debug button strip spanning the graphs section.
+    const debugButtonHeight = Math.max(30, lineHeight * 1.7)
+    const graphsSectionHeight = debugButtonHeight + graphsGap + graphPanelHeight * 2 + graphsGap
     const rowsBottom = rect.y + rect.height - graphsSectionHeight - graphsGap - 7
     const rowHeight = Math.max(15, Math.min(lineHeight * 1.15, (rowsBottom - rowsTop) / 5.5))
     const visibleRows = Math.max(1, Math.floor((rowsBottom - rowsTop) / rowHeight))
@@ -600,6 +629,26 @@ export class UiWindow implements GameWindow {
     const graphX = rect.x + pad
     const checklistX = graphX + graphColumnWidth + columnGap
     const checklistWidth = Math.max(0, graphsWidth - graphColumnWidth - columnGap)
+    const graphsTop = graphsY + debugButtonHeight + graphsGap
+    const graphsBlockHeight = graphPanelHeight * 2 + graphsGap
+
+    // Tall debug button on top of the graphs, spanning the whole section.
+    // Hidden (and unclickable) while the selected component is healthy.
+    this.openButtonRect = null
+    const selected = this.getSelectedComponent()
+    if (selected && toUiStatus(selected.status) !== 'normal') {
+      const debugButton: Rect = { x: graphX, y: graphsY, width: graphsWidth, height: debugButtonHeight }
+      this.openButtonRect = debugButton
+      this.drawButton(
+        ctx,
+        debugButton,
+        this.language === 'ru' ? 'ЗАПУСТИТЬ ОТЛАДКУ' : 'OPEN DEBUG',
+        COLORS.redDark,
+        COLORS.redBright,
+        true,
+        smallFont,
+      )
+    }
 
     const reactorWin = this.manager?.get('reactor') as unknown as { solved?: boolean; computeStability?: () => number } | undefined
     const currentStability = typeof reactorWin?.computeStability === 'function'
@@ -685,7 +734,7 @@ export class UiWindow implements GameWindow {
     // Power distribution is intentionally above reactor stability.
     drawLineGraph(
       graphX,
-      graphsY,
+      graphsTop,
       graphColumnWidth,
       graphPanelHeight,
       powerTitle,
@@ -695,7 +744,7 @@ export class UiWindow implements GameWindow {
     )
     drawLineGraph(
       graphX,
-      graphsY + graphPanelHeight + graphsGap,
+      graphsTop + graphPanelHeight + graphsGap,
       graphColumnWidth,
       graphPanelHeight,
       stabTitle,
@@ -708,9 +757,9 @@ export class UiWindow implements GameWindow {
       ctx,
       {
         x: checklistX,
-        y: graphsY,
+        y: graphsTop,
         width: checklistWidth,
-        height: graphsSectionHeight,
+        height: graphsBlockHeight,
       },
       font,
       lineHeight,
@@ -954,12 +1003,7 @@ export class UiWindow implements GameWindow {
 
     const pad = 9
     const component = this.getSelectedComponent()
-    const buttonHeight = Math.max(22, Math.min(lineHeight * 1.3, rect.height * 0.30))
-    const buttonY = rect.y + rect.height - buttonHeight - 6
     const contentTop = rect.y + 6
-
-    // Clear stale hit area: the debug button is only clickable while it is visible.
-    this.openButtonRect = null
 
     if (!component) {
       ctx.font = font
@@ -994,28 +1038,6 @@ export class UiWindow implements GameWindow {
     ctx.fillStyle = COLORS.dim
     const recommendation = component.recommendation || (this.language === 'ru' ? 'Рекомендаций нет.' : 'No recommendation.')
     ctx.fillText(this.fitText(ctx, this.written(recommendation), rect.width - pad * 2), rect.x + pad, contentTop + lineHeight * 2.05)
-
-    // Show debug action only for components that are not healthy.
-    // Keep the hit area empty when hidden so it cannot be clicked invisibly.
-    if (toUiStatus(component.status) !== 'normal') {
-      const debugButton: Rect = {
-        x: rect.x + pad,
-        y: buttonY,
-        width: Math.max(0, rect.width - pad * 2),
-        height: buttonHeight,
-      }
-      this.openButtonRect = debugButton
-
-      this.drawButton(
-        ctx,
-        debugButton,
-        this.language === 'ru' ? 'ЗАПУСТИТЬ ОТЛАДКУ' : 'OPEN DEBUG',
-        COLORS.redDark,
-        COLORS.redBright,
-        true,
-        smallFont,
-      )
-    }
   }
 
   private drawPowerPanel(
@@ -1042,7 +1064,7 @@ export class UiWindow implements GameWindow {
       rect.y + 7,
     )
 
-    const buttonHeight = Math.max(22, Math.min(lineHeight * 1.3, rect.height - lineHeight * 1.7 - 14))
+    const buttonHeight = Math.max(28, rect.height - lineHeight * 1.2 - 12)
     const powerButton: Rect = {
       x: rect.x + pad,
       y: rect.y + rect.height - buttonHeight - 6,
