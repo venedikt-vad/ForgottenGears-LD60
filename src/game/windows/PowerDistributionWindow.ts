@@ -19,6 +19,8 @@ const COLORS = {
   source: '#e6ff5c',
   sourceGlow: 'rgba(200, 255, 90, 0.5)',
   sinkOff: '#e05a4a',
+  // Outputs 1 and 5 must stay dark; idle grey instead of fault red.
+  sinkIdle: '#8b9691',
   sinkOn: '#66ff88',
   dim: '#2f6b45',
   text: '#bff7cf',
@@ -558,7 +560,7 @@ export class PowerDistributionWindow implements GameWindow {
       const sink = this.sinks[i]
       const si = this.sinkIndices[i]
       const live = this.powered[si] && (this.masks[si] & sink.bit) !== 0
-      const color = live ? COLORS.sinkOn : COLORS.sinkOff
+      const color = this.sinkColor(i, live)
 
       const dot = Math.max(6, Math.floor(small * 0.7))
       ctx.fillStyle = color
@@ -801,6 +803,15 @@ export class PowerDistributionWindow implements GameWindow {
     this.drawTerminalLabel(ctx, cx, cy, dir, 'IN', COLORS.source, alpha)
   }
 
+  /**
+   * Output color by legend index: live reads green; dark reads red for systems
+   * that still need power and grey for the outputs meant to stay idle (1 and 5).
+   */
+  private sinkColor(index: number, live: boolean): string {
+    if (live) return COLORS.sinkOn
+    return TARGET_OUTPUTS[index] ? COLORS.sinkOff : COLORS.sinkIdle
+  }
+
   private drawSink(ctx: CanvasRenderingContext2D, sink: Terminal, ordinal: number, alpha: number): void {
     if (alpha <= 0) return
     const size = this.cellSize
@@ -810,10 +821,13 @@ export class PowerDistributionWindow implements GameWindow {
     const cy = this.gridY + row * size + size / 2
     const index = row * COLS + col
     const live = this.powered[index] && (this.masks[index] & sink.bit) !== 0
-    const color = live ? COLORS.sinkOn : COLORS.sinkOff
+    const color = this.sinkColor(ordinal - 1, live)
     const dir = ORDER.find((item) => item.bit === sink.bit)!
 
-    this.drawStub(ctx, cx, cy, dir, color, live ? COLORS.pipeGlow : 'rgba(224, 90, 74, 0.45)', live, alpha)
+    const glow = live
+      ? COLORS.pipeGlow
+      : TARGET_OUTPUTS[ordinal - 1] ? 'rgba(224, 90, 74, 0.45)' : 'rgba(139, 150, 145, 0.4)'
+    this.drawStub(ctx, cx, cy, dir, color, glow, live, alpha)
     this.drawTerminalLabel(ctx, cx, cy, dir, `${ordinal}`, color, alpha)
   }
 

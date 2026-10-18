@@ -163,7 +163,7 @@ export class UiWindow implements GameWindow {
     // Select the first visible component that needs attention, if there is one.
     this.visibleComponents = this.getFilteredComponents()
     const firstProblem = this.visibleComponents.findIndex(
-      (item) => toUiStatus(item.status) !== 'normal',
+      (item) => toUiStatus(this.effectiveStatus(item)) !== 'normal',
     )
     this.selectedIndex = firstProblem >= 0 ? firstProblem : (this.visibleComponents.length > 0 ? 0 : -1)
     this.scrollTop = 0
@@ -424,9 +424,28 @@ export class UiWindow implements GameWindow {
     }
   }
 
+  /** Win-condition components read NORMAL once their puzzle is solved. */
+  private effectiveStatus(component: RuntimeComponent): RuntimeStatus {
+    if (!this.isWinConditionMet(component)) return component.status
+    return 'ONLINE'
+  }
+
+  private isWinConditionMet(component: RuntimeComponent): boolean {
+    const windowId = component.windowId
+    if (!windowId || !this.manager) return false
+    // The motion profile reports through robotSystem, not a window flag.
+    if (windowId === 'editor') return this.robotSystem.motionProfileRestored
+    try {
+      const target = this.manager.get(windowId) as unknown as { solved?: boolean; isSolved?: boolean }
+      return Boolean(target.solved ?? target.isSolved)
+    } catch {
+      return false
+    }
+  }
+
   private getFilteredComponents(): RuntimeComponent[] {
     const components = this.robotSystem.listComponents().filter((component) => {
-      const isNormal = toUiStatus(component.status) === 'normal'
+      const isNormal = toUiStatus(this.effectiveStatus(component)) === 'normal'
       return isNormal || this.hasRegisteredMinigame(component)
     })
 
@@ -456,7 +475,7 @@ export class UiWindow implements GameWindow {
     this.visibleComponents = this.getFilteredComponents()
 
     const firstProblem = this.visibleComponents.findIndex(
-      (component) => toUiStatus(component.status) !== 'normal',
+      (component) => toUiStatus(this.effectiveStatus(component)) !== 'normal',
     )
     this.selectedIndex = firstProblem >= 0
       ? firstProblem
@@ -486,7 +505,7 @@ export class UiWindow implements GameWindow {
 
   private getUiCounts(): Record<UiStatus, number> {
     const counts: Record<UiStatus, number> = { normal: 0, disabled: 0, damaged: 0 }
-    for (const item of this.robotSystem.listComponents()) counts[toUiStatus(item.status)] += 1
+    for (const item of this.robotSystem.listComponents()) counts[toUiStatus(this.effectiveStatus(item))] += 1
     return counts
   }
 
@@ -587,7 +606,7 @@ export class UiWindow implements GameWindow {
 
       // Damaged entries draw a red border that blinks on and off.
       if (
-        toUiStatus(component.status) === 'damaged' &&
+        toUiStatus(this.effectiveStatus(component)) === 'damaged' &&
         this.blinkClock % DAMAGE_BLINK_PERIOD < DAMAGE_BLINK_ON
       ) {
         ctx.save()
@@ -609,8 +628,8 @@ export class UiWindow implements GameWindow {
 
       ctx.font = smallFont
       ctx.textAlign = 'right'
-      ctx.fillStyle = statusColor(component.status)
-      ctx.fillText(statusLabel(component.status, this.language), rect.x + rect.width - pad, y + Math.max(0, (rowHeight - fontSize) / 2), statusW)
+      ctx.fillStyle = statusColor(this.effectiveStatus(component))
+      ctx.fillText(statusLabel(this.effectiveStatus(component), this.language), rect.x + rect.width - pad, y + Math.max(0, (rowHeight - fontSize) / 2), statusW)
       ctx.textAlign = 'left'
       ctx.restore()
     }
@@ -640,7 +659,7 @@ export class UiWindow implements GameWindow {
     // Hidden (and unclickable) while the selected component is healthy.
     this.openButtonRect = null
     const selected = this.getSelectedComponent()
-    if (selected && toUiStatus(selected.status) !== 'normal') {
+    if (selected && toUiStatus(this.effectiveStatus(selected)) !== 'normal') {
       const debugButton: Rect = { x: graphX, y: graphsY, width: graphsWidth, height: debugButtonHeight }
       this.openButtonRect = debugButton
       this.drawButton(
@@ -1004,8 +1023,8 @@ export class UiWindow implements GameWindow {
   private statusForPart(part: Exclude<BodyPart, 'ALL'>): RuntimeStatus {
     const ids = PARTS.find((item) => item.id === part)?.componentIds ?? []
     const components = this.robotSystem.listComponents().filter((item) => ids.includes(item.id))
-    if (components.some((item) => toUiStatus(item.status) === 'damaged')) return 'CRITICAL'
-    if (components.some((item) => toUiStatus(item.status) === 'disabled')) return 'OFFLINE'
+    if (components.some((item) => toUiStatus(this.effectiveStatus(item)) === 'damaged')) return 'CRITICAL'
+    if (components.some((item) => toUiStatus(this.effectiveStatus(item)) === 'disabled')) return 'OFFLINE'
     return 'ONLINE'
   }
 
@@ -1043,8 +1062,8 @@ export class UiWindow implements GameWindow {
     ctx.fillText(this.fitText(ctx, this.written(title), rect.width - pad * 2 - 140), rect.x + pad, contentTop)
 
     ctx.textAlign = 'right'
-    ctx.fillStyle = statusColor(component.status)
-    ctx.fillText(this.written(statusLabel(component.status, this.language)), rect.x + rect.width - pad, contentTop)
+    ctx.fillStyle = statusColor(this.effectiveStatus(component))
+    ctx.fillText(this.written(statusLabel(this.effectiveStatus(component), this.language)), rect.x + rect.width - pad, contentTop)
     ctx.textAlign = 'left'
 
     ctx.font = smallFont
