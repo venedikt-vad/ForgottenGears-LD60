@@ -36,6 +36,29 @@ export interface CodeEditorOptions {
 const DEFAULT_FILE = '/opt/firmware/motion/оптимизатор_акселерации_1.0.18.drv'
 const EDITABLE_EXTENSION = /\.(drv|seq|cfg|txt|conf|asm|src|md)$/i
 
+// Opening animation timings (seconds): both pane frames stretch from the center
+// out to the sides, the text types itself in, then the file list fills in one
+// row after another and the help panel fades up last.
+const APPEAR_FRAME = 0.4
+const APPEAR_TEXT_START = 0.4
+const APPEAR_TEXT = 0.8
+const APPEAR_FILES_START = 0.45
+const APPEAR_FILE_STAGGER = 0.05
+const APPEAR_FILE_ROW = 0.18
+// Rows past this one share the delay so long file lists never drag the reveal out.
+const APPEAR_FILE_STAGGER_CAP = 14
+const APPEAR_FOOTER_START = 1.25
+const APPEAR_FOOTER = 0.3
+const APPEAR_TOTAL = APPEAR_FOOTER_START + APPEAR_FOOTER
+
+function clamp01(value: number): number {
+  return value <= 0 ? 0 : value >= 1 ? 1 : value
+}
+
+function easeOut(t: number): number {
+  return 1 - (1 - t) * (1 - t)
+}
+
 /**
  * Canvas-based Vim-like editor for the in-game virtual filesystem.
  * File selection works with both the mouse and keyboard.
@@ -69,10 +92,15 @@ export class CodeEditorWindow implements GameWindow {
   private yankLine = ''
   private undoStack: string[][] = []
   private checkedBufferText: string | null = null
+  // Last :check verdict, pinned to the bottom of the source pane until another
+  // file is opened. `text` is the buffer that was checked, used to flag edits.
+  private checkResult: { ok: boolean; detail: string; text: string } | null = null
   private showLineNumbers = true
   private blinkClock = 0
   private message = 'NORMAL  |  :help — справка по клавишам'
   private messageIsError = false
+  private appearTime = APPEAR_TOTAL
+  private openedThisFrame = false
   private readonly maxUndo = 80
 
   private pointerCanvas: HTMLCanvasElement | null = null
@@ -108,6 +136,9 @@ export class CodeEditorWindow implements GameWindow {
 
   onShow(manager: WindowManager): void {
     this.manager = manager
+    // Replay the appear animation each time the window is opened.
+    this.appearTime = 0
+    this.openedThisFrame = true
     this.refreshFileList()
     if (!this.currentPath && this.files.length) {
       this.loadFile(this.files[this.selectedFileIndex]!)
@@ -142,7 +173,22 @@ export class CodeEditorWindow implements GameWindow {
 
   update(_dt: number, input: Input): void {
     this.blinkClock += _dt
-    for (const event of input.getPressedKeyEvents()) {
+    this.appearTime += _dt
+
+    const events = input.getPressedKeyEvents()
+    // The key that opened the window must not skip its own animation.
+    if (this.openedThisFrame) {
+      this.openedThisFrame = false
+    } else if (this.appearTime < APPEAR_TOTAL && events.length) {
+      // Any later key jumps straight to the finished layout.
+      this.appearTime = APPEAR_TOTAL
+      return
+    }
+
+    // Input is locked while the opening animation plays.
+    if (this.appearTime < APPEAR_TOTAL) return
+
+    for (const event of events) {
       if (this.mode === 'INSERT') {
         this.handleInsertKey(event.key)
       } else if (this.mode === 'COMMAND' || this.mode === 'SEARCH') {
@@ -169,6 +215,11 @@ export class CodeEditorWindow implements GameWindow {
     const normalFont = `${fontSize}px "${FONT_FAMILY}", monospace`
     const boldFont = `bold ${fontSize}px "${FONT_FAMILY}", monospace`
 
+    // Opening animation progress values.
+    const frameProgress = easeOut(clamp01(this.appearTime / APPEAR_FRAME))
+    const textProgress = clamp01((this.appearTime - APPEAR_TEXT_START) / APPEAR_TEXT)
+    const footerAlpha = clamp01((this.appearTime - APPEAR_FOOTER_START) / APPEAR_FOOTER)
+
     // Reserve a larger, single help panel at the bottom. Narrow screens get
     // extra height because the longer help lines may wrap.
     const compactFooterLayout = width < 700
@@ -186,16 +237,20 @@ export class CodeEditorWindow implements GameWindow {
     const codeX = dividerX + 12
     const codeWidth = Math.max(50, width - codeX - margin)
 
-    this.drawPaneFrame(ctx, fileX - 3, bodyTop, fileWidth + 4, bodyHeight, this.activePane === 'files')
-    this.drawPaneFrame(ctx, codeX - 4, bodyTop, codeWidth + 4, bodyHeight, this.activePane === 'editor')
+    this.drawPaneFrame(ctx, fileX - 3, bodyTop, fileWidth + 4, bodyHeight, this.activePane === 'files', frameProgress)
+    this.drawPaneFrame(ctx, codeX - 4, bodyTop, codeWidth + 4, bodyHeight, this.activePane === 'editor', frameProgress)
 
     ctx.font = boldFont
     ctx.fillStyle = '#ffd02f'
-    ctx.fillText(this.language === 'ru' ? 'ФАЙЛОВАЯ СИСТЕМА' : 'FILE SYSTEM', fileX + 3, bodyTop + 5)
+    ctx.fillText(this.written(this.language === 'ru' ? 'ФАЙЛОВАЯ СИСТЕМА' : 'FILE SYSTEM', textProgress), fileX + 3, bodyTop + 5)
     ctx.textAlign = 'right'
     ctx.font = tinyFont
     ctx.fillStyle = '#d59b20'
-    ctx.fillText(`${this.files.length} ${this.language === 'ru' ? 'ФАЙЛОВ' : 'FILES'}`, fileX + fileWidth - 2, bodyTop + 7)
+    ctx.fillText(
+      this.written(`${this.files.length} ${this.language === 'ru' ? 'ФАЙЛОВ' : 'FILES'}`, textProgress),
+      fileX + fileWidth - 2,
+      bodyTop + 7,
+    )
     ctx.textAlign = 'left'
 
     const listTop = bodyTop + lineHeight * 1.7
@@ -238,27 +293,40 @@ export class CodeEditorWindow implements GameWindow {
       const index = this.fileScrollTop + row
       const path = this.files[index]
       if (!path) break
+      // Rows fade and slide in one after another while the window opens.
+      const delay = Math.min(row, APPEAR_FILE_STAGGER_CAP) * APPEAR_FILE_STAGGER
+      const rowProgress = easeOut(clamp01((this.appearTime - APPEAR_FILES_START - delay) / APPEAR_FILE_ROW))
+      if (rowProgress <= 0) continue
+
       const y = listTop + row * lineHeight
       const selected = index === this.selectedFileIndex
+      const basename = this.basename(path)
+      const prefix = EDITABLE_EXTENSION.test(path) ? '>' : '·'
+
+      ctx.save()
+      ctx.globalAlpha = rowProgress
+      ctx.translate((rowProgress - 1) * 10, 0)
       if (selected) {
         ctx.fillStyle = '#507500'
         ctx.fillRect(fileX, y - 1, fileWidth - 2, lineHeight)
       }
-      const basename = this.basename(path)
-      const prefix = EDITABLE_EXTENSION.test(path) ? '>' : '·'
       ctx.fillStyle = selected ? '#f8ff97' : (EDITABLE_EXTENSION.test(path) ? '#f1b22c' : '#8f661d')
       ctx.fillText(`${prefix} ${this.fitText(ctx, basename, fileWidth - 34)}`, fileX + 5, y)
       ctx.textAlign = 'right'
       ctx.fillStyle = '#c68b17'
       ctx.fillText(this.extension(path).toUpperCase().slice(0, 5), fileX + fileWidth - 7, y)
       ctx.textAlign = 'left'
+      ctx.restore()
     }
 
     // Active path and source pane.
     ctx.font = boldFont
     ctx.fillStyle = '#ffe15a'
     ctx.fillText(
-      this.currentPath || (this.language === 'ru' ? '[ФАЙЛ НЕ ВЫБРАН]' : '[NO FILE SELECTED]'),
+      this.written(
+        this.currentPath || (this.language === 'ru' ? '[ФАЙЛ НЕ ВЫБРАН]' : '[NO FILE SELECTED]'),
+        textProgress,
+      ),
       codeX + 3,
       bodyTop + 5,
       codeWidth - 8,
@@ -266,11 +334,14 @@ export class CodeEditorWindow implements GameWindow {
     ctx.font = tinyFont
     ctx.textAlign = 'right'
     ctx.fillStyle = this.isDirty() ? '#ff9861' : '#d8a733'
-    ctx.fillText(this.isDirty() ? '● MODIFIED' : 'SAVED', width - margin - 2, bodyTop + 7)
+    ctx.fillText(this.written(this.isDirty() ? '● MODIFIED' : 'SAVED', textProgress), width - margin - 2, bodyTop + 7)
     ctx.textAlign = 'left'
 
     const codeTop = bodyTop + lineHeight * 1.7
-    const codeBottom = bodyBottom - 5
+    // A :check verdict is pinned to the bottom of the source pane, so the code
+    // area gives up one row for it while a result for this file exists.
+    const checkStripHeight = this.checkResult ? lineHeight + 4 : 0
+    const codeBottom = bodyBottom - 5 - checkStripHeight
     const codeRows = Math.max(1, Math.floor((codeBottom - codeTop) / lineHeight))
     const gutterWidth = this.showLineNumbers
       ? Math.max(28, ctx.measureText(String(this.buffer.length)).width + 14)
@@ -282,10 +353,25 @@ export class CodeEditorWindow implements GameWindow {
     if (this.cursorRow >= this.scrollTop + codeRows) this.scrollTop = this.cursorRow - codeRows + 1
     this.scrollTop = Math.max(0, Math.min(this.scrollTop, Math.max(0, this.buffer.length - codeRows)))
 
+    // While the window opens the source text is typed out character by character.
+    let typedTotal = 0
+    for (let row = 0; row < codeRows; row += 1) {
+      const line = this.buffer[this.scrollTop + row]
+      if (line === undefined) break
+      typedTotal += line.length + 1
+    }
+    const writeBudget = Math.floor(typedTotal * textProgress)
+    let typedBefore = 0
+
     for (let row = 0; row < codeRows; row += 1) {
       const lineIndex = this.scrollTop + row
       const line = this.buffer[lineIndex]
       if (line === undefined) break
+      // Lines still waiting for their turn in the typewriter are not drawn yet.
+      if (textProgress <= 0 || writeBudget < typedBefore) break
+      const shown = line.slice(0, Math.min(line.length, writeBudget - typedBefore))
+      typedBefore += line.length + 1
+
       const y = codeTop + row * lineHeight
       const isCurrent = lineIndex === this.cursorRow && this.activePane === 'editor'
 
@@ -302,7 +388,9 @@ export class CodeEditorWindow implements GameWindow {
         ctx.textAlign = 'left'
       }
 
-      this.drawCodeLine(ctx, line, textX, y, maxTextWidth, normalFont, tinyFont)
+      this.drawCodeLine(ctx, shown, textX, y, maxTextWidth, normalFont, tinyFont)
+
+      if (textProgress < 1) continue
 
       if (isCurrent && this.mode === 'NORMAL' && this.blinkClock % 1.1 < 0.65) {
         const before = line.slice(0, this.cursorCol)
@@ -320,9 +408,22 @@ export class CodeEditorWindow implements GameWindow {
       }
     }
 
+    // The last :check verdict stays pinned below the code while this file is
+    // open, so it survives typing and other transient status messages.
+    if (checkStripHeight > 0) {
+      ctx.save()
+      ctx.globalAlpha = textProgress
+      this.drawCheckStrip(ctx, codeX - 3, bodyBottom - 5 - checkStripHeight, codeWidth + 2, checkStripHeight, tinyFont)
+      ctx.restore()
+    }
+
     // One large, continuous help panel. File state and editor status occupy
     // compact rows at the top; the rest of the panel is dedicated to readable
     // keyboard instructions. No nested cards, columns, or boxed help items.
+    // It fades in last, once the panes have finished opening.
+    ctx.save()
+    ctx.globalAlpha = footerAlpha
+
     const footerY = bodyBottom + 8
     const footerW = width - margin * 2
     const footerH = footerHeight - 5
@@ -458,6 +559,8 @@ export class CodeEditorWindow implements GameWindow {
     }
 
     ctx.restore()
+
+    ctx.restore()
   }
 
   private attachPointerInput(canvas: HTMLCanvasElement): void {
@@ -479,6 +582,11 @@ export class CodeEditorWindow implements GameWindow {
 
   private handleCanvasPointer(event: MouseEvent, openFile: boolean): void {
     if (event.button !== 0) return
+    // A click while the window is still opening just skips the animation.
+    if (this.appearTime < APPEAR_TOTAL) {
+      this.appearTime = APPEAR_TOTAL
+      return
+    }
     const canvas = this.pointerCanvas
     const layout = this.pointerLayout
     if (!canvas || !layout) return
@@ -799,11 +907,11 @@ export class CodeEditorWindow implements GameWindow {
 
     if (valid) {
       this.checkedBufferText = this.buffer.join('\n')
-      this.setMessage(this.language === 'ru' ? 'CHECK OK: ПОСЛЕДОВАТЕЛЬНОСТЬ И БЛОКИРОВКИ КОРРЕКТНЫ. СОХРАНИТЕ :w' : 'CHECK OK: SEQUENCE AND INTERLOCKS VALID. SAVE WITH :w')
+      this.checkResult = { ok: true, detail: '', text: this.checkedBufferText }
     } else {
       this.checkedBufferText = null
       const missing = firstMissing >= 0 ? required[firstMissing] : !orderValid ? 'SEQUENCE ORDER' : 'CRC_CHECK=true / REQUIRE_COOLING=true'
-      this.setMessage(`CHECK FAILED: ${missing}`, true)
+      this.checkResult = { ok: false, detail: missing, text: this.buffer.join('\n') }
       this.onValidate?.(this.currentPath, false)
     }
   }
@@ -848,6 +956,7 @@ export class CodeEditorWindow implements GameWindow {
     this.pendingNormalKey = ''
     this.undoStack = []
     this.checkedBufferText = null
+    this.checkResult = null
     const index = this.files.findIndex((entry) => entry.toLowerCase() === path.toLowerCase())
     if (index >= 0) this.selectedFileIndex = index
     this.setMessage(this.language === 'ru' ? `ОТКРЫТ: ${path}` : `OPENED: ${path}`)
@@ -1058,6 +1167,48 @@ export class CodeEditorWindow implements GameWindow {
     return `${fitted}…`
   }
 
+  /** Text revealed by the opening typewriter: a growing fraction of its length. */
+  private written(text: string, progress: number): string {
+    if (progress >= 1) return text
+    if (progress <= 0) return ''
+    return text.slice(0, Math.ceil(text.length * progress))
+  }
+
+  /** Persistent :check verdict pinned to the bottom of the source pane. */
+  private drawCheckStrip(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    tinyFont: string,
+  ): void {
+    const result = this.checkResult
+    if (!result || width <= 0 || height <= 0) return
+
+    ctx.fillStyle = '#351a00'
+    ctx.fillRect(x, y, width, height)
+    ctx.strokeStyle = result.ok ? '#6f9a2a' : '#b84000'
+    ctx.lineWidth = 1
+    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1)
+
+    // The verdict describes the text it was run against; later edits mark it stale.
+    const stale = this.buffer.join('\n') !== result.text
+    const label = result.ok
+      ? (this.language === 'ru'
+          ? 'ПРОВЕРКА ОК: ПОСЛЕДОВАТЕЛЬНОСТЬ И БЛОКИРОВКИ КОРРЕКТНЫ. СОХРАНИТЕ :w'
+          : 'CHECK OK: SEQUENCE AND INTERLOCKS VALID. SAVE WITH :w')
+      : (this.language === 'ru' ? `ПРОВЕРКА НЕ ПРОЙДЕНА: ${result.detail}` : `CHECK FAILED: ${result.detail}`)
+    const text = stale
+      ? `${label} — ${this.language === 'ru' ? 'ИЗМЕНЁН ПОСЛЕ ПРОВЕРКИ' : 'CHANGED SINCE CHECK'}`
+      : label
+
+    ctx.font = tinyFont
+    ctx.textAlign = 'left'
+    ctx.fillStyle = stale ? '#c39a37' : result.ok ? '#bbd66b' : '#ff805b'
+    ctx.fillText(this.fitText(ctx, text, Math.max(1, width - 12)), x + 6, y + 3)
+  }
+
   private drawPaneFrame(
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -1065,12 +1216,22 @@ export class CodeEditorWindow implements GameWindow {
     width: number,
     height: number,
     active: boolean,
+    progress = 1,
   ): void {
+    if (width <= 0 || height <= 0 || progress <= 0) return
+
+    // While the window opens the frame stretches from the center out to both sides.
+    const drawnWidth = width * progress
+    const drawnX = x + (width - drawnWidth) / 2
+
+    ctx.save()
+    ctx.globalAlpha = progress
     ctx.fillStyle = '#2d1600'
-    ctx.fillRect(x, y, width, height)
-    ctx.strokeStyle = active ? '#ffe33c' : '#8d5b00'
+    ctx.fillRect(drawnX, y, drawnWidth, height)
+    ctx.strokeStyle = progress >= 1 ? (active ? '#ffe33c' : '#8d5b00') : '#ffd76a'
     ctx.lineWidth = active ? 1.5 : 1
-    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1)
+    ctx.strokeRect(drawnX + 0.5, y + 0.5, Math.max(1, drawnWidth - 1), height - 1)
+    ctx.restore()
   }
 
   private drawCodeLine(
