@@ -7,6 +7,7 @@ import type { GameLanguage, GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
 import { VirtualFileSystem } from '../VirtualFileSystem'
 import type { CodeEditorWindow } from './CodeEditorWindow'
+import type { RobotSystem, RuntimeStatus } from '../Game'
 
 
 
@@ -269,6 +270,7 @@ export class ConsoleWindow implements GameWindow {
   private manager: WindowManager | null = null
   private readonly fileSystem: VirtualFileSystem
   private readonly codeEditor: Pick<CodeEditorWindow, 'openFile'> | null
+  private readonly robotSystem: RobotSystem | null
 
   private language: GameLanguage = 'ru'
 
@@ -327,9 +329,14 @@ export class ConsoleWindow implements GameWindow {
 
 
 
-  constructor(fileSystem: VirtualFileSystem = new VirtualFileSystem(), codeEditor: Pick<CodeEditorWindow, 'openFile'> | null = null) {
+  constructor(
+    fileSystem: VirtualFileSystem = new VirtualFileSystem(),
+    codeEditor: Pick<CodeEditorWindow, 'openFile'> | null = null,
+    robotSystem: RobotSystem | null = null,
+  ) {
     this.fileSystem = fileSystem
     this.codeEditor = codeEditor
+    this.robotSystem = robotSystem
     this.setLanguage('ru')
   }
 
@@ -405,6 +412,7 @@ export class ConsoleWindow implements GameWindow {
       case 'terminal':
         this.handleTerminalInput(input)
         break
+
     }
 
     this.flushPendingOutput(dt)
@@ -421,10 +429,9 @@ export class ConsoleWindow implements GameWindow {
   }
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
-
     ctx.save()
 
-    ctx.clearRect(0,0,  width, height)
+    ctx.clearRect(0, 0, width, height)
 
 
 
@@ -469,8 +476,8 @@ export class ConsoleWindow implements GameWindow {
     ctx.fillText(
 
       this.language === 'ru'
-        ? 'ROM v1.08 | TAB — АВТОДОПОЛНЕНИЕ | PGUP/PGDN — ПРОКРУТКА'
-        : 'ROM v1.08 | TAB — AUTOCOMPLETE | PGUP/PGDN — SCROLLBACK',
+        ? 'ROM v1.08 | ТЕРМИНАЛ ВОССТАНОВЛЕНИЯ'
+        : 'ROM v1.08 | RECOVERY TERMINAL',
       margin,
       margin + lineHeight + 1,
       textWidth,
@@ -544,26 +551,25 @@ export class ConsoleWindow implements GameWindow {
 
 
 
+    // Put navigation hints beside the recovery-mode indicator under the console.
     ctx.font = smallFont
-
     ctx.fillStyle = '#659e5c'
+    const footerY = height - margin - lineHeight
+    const footerStatus = this.language === 'ru'
+      ? (this.robotSystem?.motionStartupComplete
+          ? 'ПИТАНИЕ: ВКЛ  |  РЕЖИМ: РАБОЧИЙ'
+          : 'ПИТАНИЕ: ВКЛ  |  РЕЖИМ: ВОССТАНОВЛЕНИЕ')
+      : (this.robotSystem?.motionStartupComplete
+          ? 'POWER: ON  |  MODE: OPERATIONAL'
+          : 'POWER: ON  |  MODE: RECOVERY')
+    const footerHints = this.language === 'ru'
+      ? '↑/↓: ИСТОРИЯ   TAB: АВТОДОПОЛНЕНИЕ'
+      : '↑/↓: HISTORY   TAB: AUTOCOMPLETE'
 
     ctx.textAlign = 'left'
-
-    ctx.fillText(
-
-      this.language === 'ru' ? 'ПИТАНИЕ: ВКЛ  |  РЕЖИМ: ВОССТАНОВЛЕНИЕ' : 'POWER: ON  |  MODE: RECOVERY',
-
-      margin,
-
-      height - margin - lineHeight,
-
-    )
-
+    ctx.fillText(footerStatus, margin, footerY, width * 0.59)
     ctx.textAlign = 'right'
-
-    ctx.fillText(`LINES: ${wrappedLines.length}`, width - margin, height - margin - lineHeight)
-
+    ctx.fillText(footerHints, width - margin, footerY, width * 0.38)
 
 
     // Fine CRT scanlines; low opacity keeps the smaller text readable.
@@ -710,10 +716,7 @@ export class ConsoleWindow implements GameWindow {
     }
   }
 
-  /**
-   * Autocomplete every supported command. `info` additionally completes component IDs.
-   * Repeated Tab presses cycle through ambiguous matches without printing them to the transcript.
-   */
+  /** Autocomplete the supported commands and paths passed to `vim`. */
   private completeCommandInput(): void {
     // Keep cycling only while the player has not edited the completed value.
     if (
@@ -746,68 +749,19 @@ export class ConsoleWindow implements GameWindow {
     const input = rawInput.trimStart()
     const commandMatch = /^(\S+)([\s\S]*)$/.exec(input)
 
-    // Tab on an empty line cycles through available command names.
-    if (!commandMatch) {
-      return this.getCommandNames()
-    }
+    if (!commandMatch) return this.getCommandNames()
 
     const enteredCommand = commandMatch[1]
     const rest = commandMatch[2] ?? ''
     const normalizedCommand = enteredCommand.toLowerCase()
 
-    // `info`, `info ` and partial component IDs complete against the registry.
-    if (normalizedCommand === 'info') {
-      const hasArgument = rest.trim().length > 0
-      const argument = rest.trim().toUpperCase()
-
-      // Component IDs are one token; ignore accidental extra arguments.
-      if (argument.includes(' ')) return []
-
-      let components = ROBOT_COMPONENTS
-      if (argument) {
-        components = components.filter((component) => component.id.startsWith(argument))
-      } else if (!hasArgument) {
-        // CPU-730 is the primary example in the operator manual, so show it first.
-        components = [
-          ...ROBOT_COMPONENTS.filter((component) => component.id === 'CPU-730'),
-          ...ROBOT_COMPONENTS.filter((component) => component.id !== 'CPU-730'),
-        ]
-      }
-
-      return components.map((component) => `${enteredCommand} ${component.id}`)
-    }
-
-    if (normalizedCommand === 'ls' || normalizedCommand === 'cat' || normalizedCommand === 'vim' || normalizedCommand === 'code') {
+    // `vim` is the only command that accepts a path argument.
+    if (normalizedCommand === 'vim' && rest.trim().length > 0) {
       const argumentPrefix = rest.trim()
-      const candidates = this.fileSystem.getPathCandidates(argumentPrefix, normalizedCommand === 'ls' || argumentPrefix.length > 0)
+      const candidates = this.fileSystem.getPathCandidates(argumentPrefix, true)
       return candidates.map((path) => `${enteredCommand} ${path}`)
     }
 
-    if (normalizedCommand === 'find') {
-      const terms = ['power', 'analyzer', 'body', 'memory', 'motion', 'cooling', 'thermal']
-      const argumentPrefix = rest.trim().toLowerCase()
-      return terms
-        .filter((term) => term.startsWith(argumentPrefix))
-        .map((term) => `${enteredCommand} ${term}`)
-    }
-
-    if (normalizedCommand === 'edit' || normalizedCommand === 'power') {
-      const argumentPrefix = rest.trim().toUpperCase()
-      const ids = normalizedCommand === 'power' ? ['ANL-450'] : ROBOT_COMPONENTS.map((item) => item.id)
-      if (!argumentPrefix) {
-        return ids.map((id) => `${enteredCommand} ${id}${normalizedCommand === 'power' ? ' on' : ''}`)
-      }
-      if (normalizedCommand === 'power') {
-        const match = /^([A-Z0-9-]*)\s*(on|off)?$/i.exec(rest.trim())
-        if (match && match[2]) return []
-        const typedId = (match?.[1] ?? argumentPrefix).toUpperCase()
-        return ids.filter((id) => id.startsWith(typedId)).map((id) => `${enteredCommand} ${id} on`)
-      }
-      return ids.filter((id) => id.startsWith(argumentPrefix)).map((id) => `${enteredCommand} ${id}`)
-    }
-
-    // The other commands take no arguments. Still complete their names uniformly,
-    // but do not replace a trailing argument or unrelated text.
     if (rest.trim().length > 0) return []
 
     const prefix = enteredCommand.toLowerCase()
@@ -818,8 +772,8 @@ export class ConsoleWindow implements GameWindow {
   }
 
   private getCommandNames(): string[] {
-    // `compinents` is retained as a compatibility alias for the original command spelling.
-    return ['help', 'components', 'compinents', 'info', 'status', 'diagnostics', 'edit', 'vim', 'code', 'power', 'ls', 'cat', 'find', 'ui', 'manual', 'clear', 'reboot']
+    // Keep help and command completion limited to the seven requested commands.
+    return ['help', 'components', 'ui', 'status', 'vim', 'manual', 'clear']
   }
 
   private clearCompletionState(): void {
@@ -832,350 +786,258 @@ export class ConsoleWindow implements GameWindow {
     const parts = rawCommand.trim().split(/\s+/)
     const command = (parts.shift() ?? '').toLowerCase()
     const rawArgument = parts.join(' ').trim()
-    const argument = rawArgument.toUpperCase()
+    const path = rawArgument || '/opt/firmware/motion/оптимизатор_акселерации_1.0.18.drv'
 
-    if (command === 'ls') {
-      this.appendLines([...this.fileSystem.list(rawArgument || '/', this.language), ''])
+    switch (command) {
+      case 'help':
+        this.appendLines(this.language === 'ru'
+          ? [
+              'ДОСТУПНЫЕ КОМАНДЫ:',
+              '  help       — список команд',
+              '  components — текущее состояние компонентов',
+              '  ui         — открыть панель обслуживания',
+              '  status     — сводка состояния робота',
+              '  vim [путь] — открыть редактор',
+              '  manual     — инструкция оператора',
+              '  clear      — полностью очистить экран консоли',
+              '',
+              'УПРАВЛЕНИЕ: ↑/↓ — история команд; TAB — автодополнение.',
+              '',
+            ]
+          : [
+              'AVAILABLE COMMANDS:',
+              '  help       — list commands',
+              '  components — live component status',
+              '  ui         — open maintenance UI',
+              '  status     — robot status summary',
+              '  vim [path] — open editor',
+              '  manual     — operator manual',
+              '  clear      — clear the console screen completely',
+              '',
+              'CONTROLS: ↑/↓ — command history; TAB — autocomplete.',
+              '',
+            ])
+        return
+
+      case 'components':
+        this.printComponentList()
+        return
+
+      case 'ui':
+        this.appendTranscript(this.language === 'ru'
+          ? 'ЗАПУСК ПАНЕЛИ ОБСЛУЖИВАНИЯ...\n'
+          : 'STARTING MAINTENANCE UI...\n')
+        this.manager?.show('ui')
+        return
+
+      case 'status':
+        this.printRobotStatus()
+        return
+
+      case 'vim':
+        if (!this.codeEditor) {
+          this.appendLines(this.language === 'ru'
+            ? ['РЕДАКТОР НЕ ПОДКЛЮЧЁН.', 'Передайте CodeEditorWindow в конструктор ConsoleWindow.', '']
+            : ['EDITOR IS NOT CONNECTED.', 'Pass CodeEditorWindow to the ConsoleWindow constructor.', ''])
+          return
+        }
+        if (this.codeEditor.openFile(path, false)) {
+          this.appendLines(this.language === 'ru'
+            ? [`ОТКРЫТИЕ РЕДАКТОРА: ${path}`, 'NORMAL: i — ввод; Esc — команды Vim; выход — :q или :wq.', '']
+            : [`OPENING EDITOR: ${path}`, 'NORMAL: i — insert; Esc — Vim commands; exit with :q or :wq.', ''])
+          this.manager?.show('editor')
+        } else {
+          this.appendLines(this.language === 'ru'
+            ? [`НЕ УДАЛОСЬ ОТКРЫТЬ ФАЙЛ: ${path}`, 'Проверьте имя файла и попробуйте снова.', '']
+            : [`COULD NOT OPEN FILE: ${path}`, 'Check the file name and try again.', ''])
+        }
+        return
+
+      case 'manual':
+        this.appendTranscript(`${this.manualText}\n\n`)
+        return
+
+      case 'clear':
+        // Remove both the visible transcript and queued output, including the
+        // just-echoed `clear` command. No confirmation text is printed.
+        this.transcript = ''
+        this.pendingOutput = ''
+        this.outputCharAccumulator = 0
+        this.scrollTopLine = 0
+        this.lastMaxScrollTop = 0
+        this.followTail = true
+        return
+
+      // The launch command is intentionally not part of `help`, whose list is
+      // restricted to the seven operator commands requested for this console.
+      case 'start':
+        this.tryStartRobot()
+        return
+
+      default:
+        this.appendTranscript(this.language === 'ru'
+          ? `НЕИЗВЕСТНАЯ КОМАНДА: ${rawCommand}. ВВЕДИТЕ help.\n\n`
+          : `UNKNOWN COMMAND: ${rawCommand}. TYPE help.\n\n`)
+    }
+  }
+
+  private tryStartRobot(): void {
+    const ru = this.language === 'ru'
+    const system = this.robotSystem
+    if (!system) {
+      this.appendLines(ru
+        ? [
+            'ОТКАЗ ЗАПУСКА: СИСТЕМНОЕ СОСТОЯНИЕ НЕ ПОДКЛЮЧЕНО К КОНСОЛИ.',
+            'Передайте shared RobotSystem в конструктор ConsoleWindow.',
+            '',
+          ]
+        : [
+            'START REFUSED: ROBOT SYSTEM STATE IS NOT CONNECTED TO THE CONSOLE.',
+            'Pass the shared RobotSystem to the ConsoleWindow constructor.',
+            '',
+          ])
       return
     }
-    if (command === 'cat') {
-      if (!rawArgument) {
-        this.appendLines(this.language === 'ru'
-          ? ['ОШИБКА: УКАЖИТЕ ПУТЬ К ФАЙЛУ.', 'ПРИМЕР: cat /manual/operator.txt', '']
-          : ['ERROR: FILE PATH REQUIRED.', 'EXAMPLE: cat /manual/operator.txt', ''])
-        return
-      }
-      const contents = this.fileSystem.read(rawArgument, this.language)
-      this.appendLines(contents ? [...contents, ''] : (this.language === 'ru'
-        ? [`ОШИБКА: ФАЙЛ НЕ НАЙДЕН: ${rawArgument}`, 'Используйте ls или find для поиска файла.', '']
-        : [`ERROR: FILE NOT FOUND: ${rawArgument}`, 'Use ls or find to locate a file.', '']))
-      return
+
+    const checks: Array<{ ready: boolean; id: string; title: string; fallback: string }> = [
+      { ready: system.reactorRestored, id: 'PWR-100', title: ru ? 'РЕАКТОР НЕ ВОССТАНОВЛЕН' : 'REACTOR NOT RESTORED', fallback: ru ? 'Не завершена безопасная последовательность запуска реактора.' : 'The reactor safe-start sequence is incomplete.' },
+      { ready: system.bodyBusRestored, id: 'PDU-230', title: ru ? 'ПИТАНИЕ КОРПУСА НЕ ПОДАНО' : 'BODY POWER IS OFF', fallback: ru ? 'Шина BODY_MAIN не активирована.' : 'The BODY_MAIN rail has not been energized.' },
+      { ready: system.busBypassRestored, id: 'ACT-610', title: ru ? 'ОБХОД ШИНЫ ПРИВОДОВ НЕ ВОССТАНОВЛЕН' : 'ACTUATOR BUS BYPASS NOT RESTORED', fallback: ru ? 'Не подтверждена непрерывность обходной линии ACT-610.' : 'Continuity of the ACT-610 bypass has not been verified.' },
+      { ready: system.memoryCoreRestored, id: 'CPU-730', title: ru ? 'ПАМЯТЬ НЕ ПРОВЕРЕНА' : 'MEMORY NOT VALIDATED', fallback: ru ? 'Ядро памяти не прошло проверку целостности.' : 'Core memory has not passed integrity validation.' },
+      { ready: system.motionProfileRestored, id: 'MCM-740', title: ru ? 'АЛГОРИТМ ДВИЖЕНИЯ НЕ ВОССТАНОВЛЕН' : 'MOTION PROFILE NOT RESTORED', fallback: ru ? 'Профиль команд движения не прошёл проверку.' : 'The motion command profile has not passed validation.' },
+      { ready: system.coolingRestored, id: 'TMP-810', title: ru ? 'ОХЛАЖДЕНИЕ НЕ ПРОВЕРЕНО' : 'COOLING NOT VERIFIED', fallback: ru ? 'Запуск заблокирован термозащитой: проверьте контур охлаждения CLG-820.' : 'Thermal interlock blocks startup: verify cooling circuit CLG-820.' },
+    ]
+
+    const blockers: string[] = []
+    for (const check of checks) {
+      if (check.ready) continue
+      const component = system.getComponent(check.id)
+      blockers.push(`- ${check.title}${component ? ` [${component.id}]` : ''}`)
+      if (component?.fault) blockers.push(`    ${ru ? 'ТЕКУЩАЯ ОШИБКА' : 'CURRENT FAULT'}: ${component.fault}`)
+      if (component?.recommendation) blockers.push(`    ${ru ? 'ДЕЙСТВИЕ' : 'ACTION'}: ${component.recommendation}`)
+      if (!component) blockers.push(`    ${check.fallback}`)
     }
-    if (command === 'find') {
-      if (!rawArgument) {
-        this.appendLines(this.language === 'ru'
-          ? ['ОШИБКА: УКАЖИТЕ СЛОВО ДЛЯ ПОИСКА.', 'ПРИМЕР: find cooling', '']
-          : ['ERROR: SEARCH TERM REQUIRED.', 'EXAMPLE: find cooling', ''])
-        return
+
+    for (const id of ['ARM-R-660', 'LEG-L-670'] as const) {
+      const component = system.getComponent(id)
+      if (component?.status === 'MISSING') {
+        blockers.push(`- ${ru ? 'НЕ ОБНАРУЖЕН ФИЗИЧЕСКИЙ МОДУЛЬ' : 'PHYSICAL ASSEMBLY NOT DETECTED'} [${id}]`)
+        blockers.push(`    ${ru ? 'ТЕКУЩАЯ ОШИБКА' : 'CURRENT FAULT'}: ${component.fault}`)
+        blockers.push(`    ${ru ? 'ДЕЙСТВИЕ' : 'ACTION'}: ${component.recommendation}`)
       }
-      const matches = this.fileSystem.find(rawArgument, this.language)
+    }
+
+    if (blockers.length > 0) {
       this.appendLines([
-        this.language === 'ru' ? `РЕЗУЛЬТАТЫ ПОИСКА: ${rawArgument}` : `SEARCH RESULTS: ${rawArgument}`,
-        ...(matches.length
-          ? matches.map((match) => `${match.path}
-  ${match.preview}`)
-          : [this.language === 'ru' ? 'Совпадений нет.' : 'No matches found.']),
+        ru ? 'ЗАПУСК ОТКЛОНЁН: ОБНАРУЖЕНЫ БЛОКИРУЮЩИЕ НЕИСПРАВНОСТИ.' : 'START REFUSED: BLOCKING FAULTS DETECTED.',
+        ru ? 'ТЕКУЩИЕ ПРИЧИНЫ:' : 'CURRENT BLOCKERS:',
+        ...blockers,
+        '',
+        ru ? 'Исправьте перечисленные проблемы и повторите команду start.' : 'Resolve the listed issues and run start again.',
         '',
       ])
       return
     }
 
-    // Keep the requested typo as an alias, but document the correct spelling.
-    if (command === 'components' || command === 'compinents') {
-      this.printComponentList()
-      return
-    }
-    if (command === 'info') {
-      this.printComponentInfo(argument)
-      return
-    }
-    if (command === 'diagnostics') {
-      this.printDiagnostics()
-      return
-    }
-    if (command === 'status') {
-      this.printRobotStatus()
-      return
-    }
-    if (command === 'vim' || command === 'code') {
-      const path = rawArgument || '/opt/firmware/motion/оптимизатор_акселерации_1.0.18.drv'
-      if (!this.codeEditor) {
-        this.appendLines(this.language === 'ru'
-          ? ['РЕДАКТОР НЕ ПОДКЛЮЧЁН.', 'Создайте CodeEditorWindow с тем же VirtualFileSystem и передайте его в ConsoleWindow.', '']
-          : ['EDITOR IS NOT WIRED.', 'Create CodeEditorWindow with the same VirtualFileSystem and pass it to ConsoleWindow.', ''])
-        return
-      }
-      if (this.codeEditor.openFile(path, false)) {
-        this.appendLines(this.language === 'ru'
-          ? [`ОТКРЫТИЕ РЕДАКТОРА: ${path}`, 'NORMAL MODE: h/j/k/l или стрелки, i — ввод, :w — сохранить, :q — выход.', '']
-          : [`OPENING EDITOR: ${path}`, 'NORMAL MODE: h/j/k/l or arrows, i — insert, :w — save, :q — quit.', ''])
-        this.manager?.show('editor')
-      } else {
-        this.appendLines(this.language === 'ru'
-          ? [`НЕ УДАЛОСЬ ОТКРЫТЬ ФАЙЛ: ${path}`, 'Используйте ls /opt/firmware/motion/ для списка файлов.', '']
-          : [`COULD NOT OPEN FILE: ${path}`, 'Use ls /opt/firmware/motion/ to list files.', ''])
-      }
-      return
-    }
-    if (command === 'edit') {
-      const target = ROBOT_COMPONENTS.find((item) => item.id === argument)
-      if (!target) {
-        this.appendLines(this.language === 'ru'
-          ? [`КОМПОНЕНТ НЕ НАЙДЕН: ${rawArgument || '(пусто)'}`, 'Используйте components для списка ID.', '']
-          : [`COMPONENT NOT FOUND: ${rawArgument || '(empty)'}`, 'Use components to list valid IDs.', ''])
-        return
-      }
-      this.appendLines(this.language === 'ru'
-        ? [`ОТКРЫТИЕ ПАНЕЛИ ОБСЛУЖИВАНИЯ: ${target.id}`, 'Выберите этот компонент в панели для открытия его редактора.', '']
-        : [`OPENING SERVICE TOOLBAR: ${target.id}`, 'Select this component in the toolbar to open its editor.', ''])
-      this.manager?.show('ui')
-      return
-    }
-    if (command === 'power') {
-      const powerMatch = /^([A-Z0-9-]+)\s+(on|off)$/i.exec(rawArgument)
-      if (!powerMatch) {
-        this.appendLines(this.language === 'ru'
-          ? ['ФОРМАТ: power <ID> on|off', 'ПРИМЕР: power ANL-450 on', '']
-          : ['USAGE: power <ID> on|off', 'EXAMPLE: power ANL-450 on', ''])
-        return
-      }
-      const target = ROBOT_COMPONENTS.find((item) => item.id === powerMatch[1].toUpperCase())
-      if (!target) {
-        this.appendLines(this.language === 'ru'
-          ? [`КОМПОНЕНТ НЕ НАЙДЕН: ${powerMatch[1].toUpperCase()}`, 'Используйте components для списка ID.', '']
-          : [`COMPONENT NOT FOUND: ${powerMatch[1].toUpperCase()}`, 'Use components to list valid IDs.', ''])
-        return
-      }
-      if (target.id !== 'ANL-450') {
-        this.appendLines(this.language === 'ru'
-          ? [`ОТКАЗ: ПРЯМОЕ УПРАВЛЕНИЕ ПИТАНИЕМ ${target.id} ЧЕРЕЗ КОНСОЛЬ ЗАПРЕЩЕНО.`, 'Используйте штатную панель обслуживания.', '']
-          : [`DENIED: DIRECT CONSOLE POWER CONTROL FOR ${target.id} IS NOT PERMITTED.`, 'Use the standard service toolbar.', ''])
-        return
-      }
-      target.status = powerMatch[2].toLowerCase() === 'on' ? 'DEGRADED' : 'OFFLINE'
-      this.appendLines(powerMatch[2].toLowerCase() === 'on'
-        ? (this.language === 'ru'
-          ? ['PDU-230: AUX_DIAG -> ANL-450 [ENABLED]', 'ANL-450: КОНТРОЛЛЕР ОТВЕЧАЕТ. ИЗМЕРИТЕЛЬНЫЕ КАНАЛЫ ЕЩЁ НЕ ПРОШЛИ ПРОВЕРКУ.', 'Откройте панель командой ui или edit ANL-450.', '']
-          : ['PDU-230: AUX_DIAG -> ANL-450 [ENABLED]', 'ANL-450: CONTROLLER RESPONDING. MEASUREMENT CHANNELS ARE NOT YET VALIDATED.', 'Open the toolbar with ui or edit ANL-450.', ''])
-        : (this.language === 'ru'
-          ? ['PDU-230: AUX_DIAG -> ANL-450 [DISABLED]', 'ANL-450: КОНТРОЛЛЕР ОБЕСТОЧЕН.', '']
-          : ['PDU-230: AUX_DIAG -> ANL-450 [DISABLED]', 'ANL-450: CONTROLLER POWERED OFF.', '']))
+    if (system.completeBodyStartup()) {
+      // Show the standalone victory window only after all launch interlocks pass.
+      this.transcript = ''
+      this.pendingOutput = ''
+      this.outputCharAccumulator = 0
+      this.scrollTopLine = 0
+      this.lastMaxScrollTop = 0
+      this.followTail = true
+      this.manager?.show('victory')
       return
     }
 
-    switch (command) {
-
-      case 'help':
-        this.appendLines(this.language === 'ru'
-          ? [
-              'ДОСТУПНЫЕ КОМАНДЫ:',
-              '  help             — список команд',
-              '  components       — список компонентов робота',
-              '  compinents       — псевдоним components',
-              '  info <ID>         — справка, например info CPU-730',
-              '  status            — сводка состояния робота',
-              '  diagnostics       — диагностика отказов и зависимостей',
-              '  edit <ID>         — открыть панель обслуживания компонента',
-              '  vim [путь]        — открыть Vim-подобный редактор кода',
-              '  power ANL-450 on  — включить вспомогательное питание анализатора',
-              '  ls [путь]         — список файлов и каталогов',
-              '  cat <путь>        — прочитать файл',
-              '  find <слово>      — поиск по файловой системе',
-              '  ui                — открыть панель обслуживания',
-              '  manual            — показать мануал',
-              '  clear             — очистить экран (история сохранится)',
-              '  reboot            — повторить загрузку BIOS',
-              '  Tab               — автодополнение команды; повторный Tab — следующий вариант',
-              '  ↑ / ↓             — история введённых команд',
-              '',
-            ]
-          : [
-              'AVAILABLE COMMANDS:',
-              '  help             — list commands',
-              '  components       — list robot components',
-              '  compinents       — alias for components',
-              '  info <ID>         — component details, e.g. info CPU-730',
-              '  status            — robot status summary',
-              '  diagnostics       — inspect faults and dependencies',
-              '  edit <ID>         — open the component service toolbar',
-              '  vim [path]        — open the Vim-like code editor',
-              '  power ANL-450 on  — enable analyzer auxiliary power',
-              '  ls [path]         — list files and directories',
-              '  cat <path>        — read a file',
-              '  find <term>       — search the virtual filesystem',
-              '  ui                — open service toolbar',
-              '  manual            — print the manual',
-              '  clear             — clear view (history is retained)',
-              '  reboot            — run BIOS startup again',
-              '  Tab               — complete command; press again for next match',
-              '  ↑ / ↓             — command history',
-              '',
-            ])
-        break
-
-      case 'ui':
-
-        this.appendTranscript(this.language === 'ru' ? 'ЗАПУСК ПАНЕЛИ ОБСЛУЖИВАНИЯ...\n' : 'STARTING SERVICE TOOLBAR...\n')
-
-        this.manager?.show('ui')
-
-        break
-      case 'manual':
-
-        this.appendTranscript(`${this.manualText}\n\n`)
-
-        break
-
-
-
-      case 'clear':
-
-        // Keep every old line available for scrolling, as requested.
-
-        this.appendLines(this.language === 'ru'
-
-          ? ['ЭКРАН ОЧИЩЕН. ИСТОРИЯ СОХРАНЕНА В SCROLLBACK.', '']
-
-          : ['SCREEN CLEARED. SCROLLBACK HISTORY RETAINED.', ''])
-
-        break
-
-
-
-      case 'reboot':
-
-        this.beginBootSequence(true)
-
-        break
-
-
-
-      default:
-
-        this.appendTranscript(this.language === 'ru'
-
-          ? `НЕИЗВЕСТНАЯ КОМАНДА: ${rawCommand}. ВВЕДИТЕ help.\n\n`
-
-          : `UNKNOWN COMMAND: ${rawCommand}. TYPE help.\n\n`)
-
-    }
-
+    const startupEvent = [...system.getEvents()].reverse().find((event) => event.source === 'BODY STARTUP')
+    this.appendLines([
+      ru ? 'ЗАПУСК НЕ СОСТОЯЛСЯ.' : 'STARTUP FAILED.',
+      startupEvent?.message ?? (ru ? 'Система отклонила запуск. Проверьте состояние компонентов командой status.' : 'The system rejected startup. Check component state with status.'),
+      '',
+    ])
   }
 
+  private mapRuntimeStatus(status: RuntimeStatus): ComponentStatus {
+    switch (status) {
+      case 'ONLINE': return 'ONLINE'
+      case 'DEGRADED': return 'DEGRADED'
+      case 'CRITICAL':
+      case 'LOCKED': return 'CRITICAL'
+      case 'OFFLINE':
+      case 'MISSING':
+      default: return 'OFFLINE'
+    }
+  }
 
+  private getComponentRows(): Array<{ id: string; name: string; category: string; status: ComponentStatus }> {
+    const live = this.robotSystem?.listComponents()
+    if (live && live.length > 0) {
+      return live.map((component) => ({
+        id: component.id,
+        name: component.name,
+        category: component.category,
+        status: this.mapRuntimeStatus(component.status),
+      }))
+    }
+    return ROBOT_COMPONENTS.map((component) => ({
+      id: component.id,
+      name: component.name,
+      category: component.category,
+      status: component.status,
+    }))
+  }
 
   private printComponentList(): void {
     const ru = this.language === 'ru'
+    const components = this.getComponentRows()
     const lines = [
       ru ? 'РЕЕСТР КОМПОНЕНТОВ РОБОТА' : 'ROBOT COMPONENT REGISTRY',
       '----------------------------------------------------------------',
-      `${'ID'.padEnd(9)} ${'COMPONENT'.padEnd(32)} ${'STATUS'.padEnd(10)} CATEGORY`,
+      `${'ID'.padEnd(12)} ${'COMPONENT'.padEnd(32)} ${'STATUS'.padEnd(10)} CATEGORY`,
       '----------------------------------------------------------------',
     ]
 
-    for (const component of ROBOT_COMPONENTS) {
+    for (const component of components) {
       lines.push(
-        `${component.id.padEnd(9)} ${component.name.padEnd(32).slice(0, 32)} ${component.status.padEnd(10)} ${component.category}`,
+        `${component.id.padEnd(12)} ${component.name.padEnd(32).slice(0, 32)} ${component.status.padEnd(10)} ${component.category}`,
       )
     }
 
     lines.push(
       '----------------------------------------------------------------',
       ru
-        ? `${ROBOT_COMPONENTS.length} КОМПОНЕНТОВ. ВВЕДИТЕ info <ID> ДЛЯ ПОДРОБНОСТЕЙ.`
-        : `${ROBOT_COMPONENTS.length} COMPONENTS. TYPE info <ID> FOR DETAILS.`,
+        ? `${components.length} КОМПОНЕНТОВ В РЕЕСТРЕ.`
+        : `${components.length} COMPONENTS IN REGISTRY.`,
       '',
     )
     this.appendLines(lines)
   }
 
-  private printComponentInfo(id: string): void {
-    const ru = this.language === 'ru'
-    if (!id) {
-      this.appendLines(ru
-        ? ['ОШИБКА: УКАЖИТЕ ID КОМПОНЕНТА.', 'ПРИМЕР: info CPU-730', '']
-        : ['ERROR: COMPONENT ID REQUIRED.', 'EXAMPLE: info CPU-730', ''])
-      return
-    }
-
-    const component = ROBOT_COMPONENTS.find((item) => item.id === id)
-    if (!component) {
-      this.appendLines(ru
-        ? [`КОМПОНЕНТ НЕ НАЙДЕН: ${id}`, 'ВВЕДИТЕ components ДЛЯ СПИСКА ID.', '']
-        : [`COMPONENT NOT FOUND: ${id}`, 'TYPE components TO LIST VALID IDS.', ''])
-      return
-    }
-
-    const language = this.language
-    const list = (ids: string[]) => ids.length > 0 ? ids.join(', ') : (ru ? 'нет' : 'none')
-    this.appendLines([
-      `${component.id} — ${component.name}`,
-      `${ru ? 'КАТЕГОРИЯ' : 'CATEGORY'}: ${component.category}`,
-      `${ru ? 'СОСТОЯНИЕ' : 'STATUS'}: [${component.status}]`,
-      '',
-      `${ru ? 'ОПИСАНИЕ' : 'DESCRIPTION'}:`,
-      component.description[language],
-      '',
-      `${ru ? 'НАЗНАЧЕНИЕ' : 'FUNCTION'}:`,
-      component.function[language],
-      '',
-      `${ru ? 'ЗАВИСИТ ОТ' : 'DEPENDENCIES'}: ${list(component.dependencies)}`,
-      `${ru ? 'ВЛИЯЕТ НА' : 'AFFECTS'}: ${list(component.affects)}`,
-      '',
-      `${ru ? 'ПРИЗНАКИ НЕИСПРАВНОСТИ' : 'FAILURE SYMPTOMS'}:`,
-      component.symptoms[language],
-      '',
-      `${ru ? 'РЕКОМЕНДАЦИЯ' : 'RECOMMENDATION'}:`,
-      component.recommendation[language],
-      '',
-    ])
-  }
-
   private printRobotStatus(): void {
     const ru = this.language === 'ru'
-    const online = ROBOT_COMPONENTS.filter((item) => item.status === 'ONLINE').length
-    const degraded = ROBOT_COMPONENTS.filter((item) => item.status === 'DEGRADED').length
-    const offline = ROBOT_COMPONENTS.filter((item) => item.status === 'OFFLINE').length
-    const critical = ROBOT_COMPONENTS.filter((item) => item.status === 'CRITICAL').length
-    const faulty = ROBOT_COMPONENTS.filter((item) => item.status !== 'ONLINE')
+    const components = this.getComponentRows()
+    const online = components.filter(({ status }) => status === 'ONLINE').length
+    const degraded = components.filter(({ status }) => status === 'DEGRADED').length
+    const offline = components.filter(({ status }) => status === 'OFFLINE').length
+    const critical = components.filter(({ status }) => status === 'CRITICAL').length
+    const faulty = components.filter(({ status }) => status !== 'ONLINE')
 
     this.appendLines([
       ru ? 'СВОДКА СОСТОЯНИЯ РОБОТА' : 'ROBOT STATUS SUMMARY',
       '-----------------------------------------------',
-      `${ru ? 'Всего компонентов' : 'Total components'}: ${ROBOT_COMPONENTS.length}`,
+      `${ru ? 'Всего компонентов' : 'Total components'}: ${components.length}`,
       `ONLINE: ${online}   DEGRADED: ${degraded}   OFFLINE: ${offline}   CRITICAL: ${critical}`,
       '',
       ru ? 'КОМПОНЕНТЫ, ТРЕБУЮЩИЕ ВНИМАНИЯ:' : 'COMPONENTS REQUIRING ATTENTION:',
-      ...faulty.map((item) => `${item.status.padEnd(8)} ${item.id}  ${item.name}`),
+      ...faulty.map(({ id, name, status }) => `${status.padEnd(8)} ${id}  ${name}`),
       '',
-      ru ? 'РЕЖИМ РОБОТА: ВОССТАНОВЛЕНИЕ' : 'ROBOT MODE: RECOVERY',
+      ru
+        ? `РЕЖИМ РОБОТА: ${this.robotSystem?.motionStartupComplete ? 'РАБОЧИЙ' : 'ВОССТАНОВЛЕНИЕ'}`
+        : `ROBOT MODE: ${this.robotSystem?.motionStartupComplete ? 'OPERATIONAL' : 'RECOVERY'}`,
       '',
     ])
-  }
-
-  private printDiagnostics(): void {
-    const ru = this.language === 'ru'
-    const issueComponents = ROBOT_COMPONENTS.filter((item) => item.status !== 'ONLINE')
-    const dependencyFaults: string[] = []
-
-    for (const component of ROBOT_COMPONENTS) {
-      for (const dependencyId of component.dependencies) {
-        const dependency = ROBOT_COMPONENTS.find((item) => item.id === dependencyId)
-        if (dependency && (dependency.status === 'OFFLINE' || dependency.status === 'CRITICAL')) {
-          dependencyFaults.push(`${component.id} -> ${dependency.id} [${dependency.status}]`)
-        }
-      }
-    }
-
-    const lines = [
-      ru ? 'ОТЧЁТ ДИАГНОСТИКИ' : 'DIAGNOSTIC REPORT',
-      '-----------------------------------------------',
-      ru
-        ? `Компонентов с отклонениями: ${issueComponents.length}`
-        : `Components with faults or degradation: ${issueComponents.length}`,
-      ...issueComponents.map((item) => `${item.status.padEnd(8)} ${item.id}  ${item.name}`),
-      '',
-      ru ? 'НАРУШЕННЫЕ ЗАВИСИМОСТИ:' : 'BROKEN DEPENDENCIES:',
-      ...(dependencyFaults.length > 0
-        ? dependencyFaults
-        : [ru ? 'Не обнаружены.' : 'None detected.']),
-      '',
-      ru
-        ? 'Примечание: отчёт использует состояния текущего реестра компонентов.'
-        : 'Note: this report uses the current component registry states.',
-      '',
-    ]
-    this.appendLines(lines)
   }
 
   private openTerminal(): void {
@@ -1819,76 +1681,37 @@ export class ConsoleWindow implements GameWindow {
 
 
   private getManualText(): string {
-
     if (this.language === 'ru') {
-
       return [
-
-        'МАНУАЛ ОПЕРАТОРА / ПРОТОКОЛ РУЧНОГО ВОССТАНОВЛЕНИЯ',
-
-        '----------------------------------------------------',
-
-        '01. НЕ ОТКЛЮЧАЙТЕ ПИТАНИЕ ВО ВРЕМЯ ДИАГНОСТИКИ.',
-
-        '02. components ВЫВОДИТ РЕЕСТР КОМПОНЕНТОВ.',
-
-        '03. info CPU-730 ПОКАЗЫВАЕТ СПРАВКУ О КОМПОНЕНТЕ.',
-
-        '04. status ПОКАЗЫВАЕТ СВОДКУ СОСТОЯНИЯ РОБОТА.',
-
-        '05. diagnostics ПРОВЕРЯЕТ НЕИСПРАВНОСТИ И ЗАВИСИМОСТИ.',
-
-        '06. ui ОТКРЫВАЕТ ПАНЕЛЬ ОБСЛУЖИВАНИЯ.',
-
-        '07. help, manual, clear И reboot — СПРАВОЧНИК И УПРАВЛЕНИЕ СЕАНСОМ.',
-
-        '08. TAB ДОПОЛНЯЕТ КОМАНДЫ; ПОВТОРНЫЙ TAB ПЕРЕКЛЮЧАЕТ ВАРИАНТЫ.',
-
-        '09. СТРЕЛКИ ВВЕРХ/ВНИЗ ПЕРЕКЛЮЧАЮТ ИСТОРИЮ КОМАНД.',
-
-        '10. НЕ ОБХОДИТЕ ЗАЩИТУ ПРИ НЕИСПРАВНОСТЯХ.',
-
-        '----------------------------------------------------',
-
+        'МАНУАЛ ОПЕРАТОРА / ПРОТОКОЛ ВОССТАНОВЛЕНИЯ',
+        '------------------------------------------',
+        '01. components — список компонентов и их текущих состояний.',
+        '02. status — сводка неисправностей и режим робота.',
+        '03. ui — открыть панель обслуживания и мини-игры.',
+        '04. vim — открыть редактор профиля движения.',
+        '05. manual — повторно показать эту инструкцию.',
+        '06. clear — полностью очистить экран консоли.',
+        '07. start — попробовать запустить робота; при отказе будет показан список блокирующих проблем.',
+        '08. ↑/↓ — история введённых команд; TAB — автодополнение видимых команд.',
+        '09. Не обходите защиту: запуск блокируется при невосстановленных критических подсистемах.',
+        '------------------------------------------',
       ].join('\n')
-
     }
-
-
-
     return [
-
-      'OPERATOR MANUAL / MANUAL RECOVERY PROTOCOL',
-
-      '------------------------------------------',
-
-      '01. DO NOT DISCONNECT POWER DURING DIAGNOSTICS.',
-
-      '02. components LISTS REGISTERED COMPONENTS.',
-
-      '03. info CPU-730 SHOWS COMPONENT INFORMATION.',
-
-      '04. status SHOWS THE ROBOT STATUS SUMMARY.',
-
-      '05. diagnostics CHECKS FAULTS AND DEPENDENCIES.',
-
-      '06. ui OPENS THE MAINTENANCE TOOLBAR.',
-
-      '07. help, manual, clear AND reboot PROVIDE HELP AND SESSION CONTROLS.',
-
-      '08. TAB COMPLETES COMMANDS; PRESS TAB AGAIN TO CYCLE MATCHES.',
-
-      '09. UP/DOWN ARROWS BROWSE COMMAND HISTORY.',
-
-      '10. DO NOT BYPASS SAFETY CONTROLS.',
-
-      '------------------------------------------',
-
+      'OPERATOR MANUAL / RECOVERY PROTOCOL',
+      '-----------------------------------',
+      '01. components — list components and their current state.',
+      '02. status — summary of faults and robot mode.',
+      '03. ui — open maintenance UI and minigames.',
+      '04. vim — open the motion-profile editor.',
+      '05. manual — print this manual again.',
+      '06. clear — fully clear the console screen.',
+      '07. start — attempt to start the robot; blocking faults are listed if startup is refused.',
+      '08. ↑/↓ — command history; TAB — autocomplete visible commands.',
+      '09. Do not bypass safety systems: startup is blocked while critical systems remain unrecovered.',
+      '-----------------------------------',
     ].join('\n')
-
   }
-
-
 
   private getManualPromptLabel(): string {
 
@@ -1929,6 +1752,7 @@ export class ConsoleWindow implements GameWindow {
       case 'terminal':
 
         return this.getTerminalPrompt()
+
 
     }
 

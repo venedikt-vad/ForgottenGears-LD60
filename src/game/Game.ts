@@ -11,6 +11,7 @@ import { UiWindow } from './windows/UiWindow'
 import { WindowManager } from './windows/WindowManager'
 import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
 import { WindowMaze } from './windows/WindowMaze'
+import { VictoryWindow } from './windows/VictoryWindow'
 
 import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem } from './VirtualFileSystem'
@@ -414,8 +415,9 @@ export class Game {
         if (valid) this.robotSystem.completeMotionProfile()
       },
     })
-    const consoleWindow = new ConsoleWindow(fileSystem, codeEditor)
+    const consoleWindow = new ConsoleWindow(fileSystem, codeEditor, this.robotSystem)
     const uiWindow = new UiWindow(this.robotSystem)
+    const victoryWindow = new VictoryWindow()
 
     // Existing puzzle windows keep their current constructors. Game.ts owns all
     // robot state; the maze only reports completion through this callback.
@@ -430,6 +432,7 @@ export class Game {
       consoleWindow.setLanguage(language)
       codeEditor.setLanguage(language)
       uiWindow.setLanguage(language)
+      victoryWindow.setLanguage(language)
       maze.setLanguage(language)
       this.windows.show('console')
     })
@@ -443,9 +446,10 @@ export class Game {
       .register(memoryCore)
       .register(powerDistribution)
       .register(maze)
+      .register(victoryWindow)
 
-    // The intended recovery walkthrough starts at the console, not at a puzzle.
-    this.windows.show('ui')
+    // Start at the language picker, then continue to the recovery console.
+    this.windows.show('language')
   }
 
   start() {
