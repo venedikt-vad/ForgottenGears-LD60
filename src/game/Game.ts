@@ -584,6 +584,12 @@ export class Game {
   private mirrorToGlow() {
     const { glowCtx, glowCanvas } = this
     glowCtx.clearRect(0, 0, glowCanvas.width, glowCanvas.height)
+
+    // Brownout: while the power grid is over capacity the glow layer is cut
+    // on every screen, and comes back once the load drops to normal.
+    const power = this.windows.get('powerDistribution') as unknown as { powerOverCapacity?: boolean } | undefined
+    if (power?.powerOverCapacity) return
+
     glowCtx.drawImage(this.canvas, 0, 0)
   }
 
