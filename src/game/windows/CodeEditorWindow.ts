@@ -1,5 +1,6 @@
 import type { Input, InputKeyEvent } from '../Input'
 import { FONT_FAMILY } from '../fonts'
+import { playSfx } from '../sfx'
 import { VirtualFileSystem } from '../VirtualFileSystem'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
@@ -908,10 +909,12 @@ export class CodeEditorWindow implements GameWindow {
     if (valid) {
       this.checkedBufferText = this.buffer.join('\n')
       this.checkResult = { ok: true, detail: '', text: this.checkedBufferText }
+      playSfx('correct')
     } else {
       this.checkedBufferText = null
       const missing = firstMissing >= 0 ? required[firstMissing] : !orderValid ? 'SEQUENCE ORDER' : 'CRC_CHECK=true / REQUIRE_COOLING=true'
       this.checkResult = { ok: false, detail: missing, text: this.buffer.join('\n') }
+      playSfx('incorrect')
       this.onValidate?.(this.currentPath, false)
     }
   }

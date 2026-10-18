@@ -1,4 +1,5 @@
 import { FONT_FAMILY, LOST_LANGUAGE_FAMILY } from '../fonts'
+import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
@@ -155,6 +156,7 @@ export class MemoryCoreWindow implements GameWindow {
       const column = Math.floor((position.x - this.hitX) / this.cellW)
       const row = Math.floor((position.y - this.hitY) / this.cellH)
       if (column >= 0 && column < this.columns && row >= 0 && row < this.rows) {
+        if (column !== this.focusCol || row !== this.focusRow) playSfx('selection')
         this.focusCol = column
         this.focusRow = row
       }
@@ -198,7 +200,13 @@ export class MemoryCoreWindow implements GameWindow {
         this.answers.set(index, current.slice(0, -1))
       } else if (key.length === 1 && key >= '0' && key <= '9') {
         const current = this.answers.get(index) ?? ''
-        if (current.length < 3) this.answers.set(index, current + key)
+        if (current.length < 3) {
+          const value = current + key
+          this.answers.set(index, value)
+          const answer = String(this.values[index])
+          if (value === answer) playSfx('correct')
+          else if (!answer.startsWith(value)) playSfx('incorrect')
+        }
       }
     }
   }

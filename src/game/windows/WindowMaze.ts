@@ -1,4 +1,5 @@
 import { FONT_FAMILY } from '../fonts'
+import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import { GlyphRain, type RainStyle } from './GlyphRain'
@@ -155,6 +156,7 @@ export class WindowMaze implements GameWindow {
 
       if (cell === this.field.exit) {
         this.solved = true
+        playSfx('correct')
         this.onSolved?.()
         return
       }
@@ -162,6 +164,7 @@ export class WindowMaze implements GameWindow {
   }
 
   private failRun(): void {
+    playSfx('incorrect')
     this.field.clearRoute(true)
     this.route = []
   }
