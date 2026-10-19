@@ -1,13 +1,13 @@
-import { FONT_FAMILY } from '../fonts'
-import { playSfx } from '../sfx'
-import type { Input } from '../Input'
-import type { GameLanguage, GameWindow } from './GameWindow'
+import { FONT_FAMILY } from '../../fonts'
+import { playSfx } from '../../sfx'
+import type { Input } from '../../Input'
+import type { GameLanguage, GameWindow } from '../GameWindow'
 import { GlyphRain, type RainStyle } from './GlyphRain'
 import type { MazeCell, MazeCellStyle, MazeTileStyles } from './MazeCell'
 import { loadRandomMaze, type MazeField, type Rect } from './MazeField'
 import { ScanWave } from './ScanWave'
-import { SolvePopup } from './SolvePopup'
-import type { WindowManager } from './WindowManager'
+import { SolvePopup } from '../SolvePopup'
+import type { WindowManager } from '../WindowManager'
 
 const COLORS = {
   panel: 'rgba(40, 22, 6, 0.22)',

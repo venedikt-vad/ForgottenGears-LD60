@@ -1,4 +1,4 @@
-import { FONT_FAMILY } from '../fonts'
+import { FONT_FAMILY } from '../../fonts'
 
 // Glyph pool of an untouched tile: digits and technical symbols, in the spirit of
 // the memory-core tables.

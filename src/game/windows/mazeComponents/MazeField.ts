@@ -1,8 +1,8 @@
 import { MazeCell, type MazeTileStyles } from './MazeCell'
 import type { ScanWave } from './ScanWave'
-import maze01 from '../mazes/maze_01.txt?raw'
-import maze02 from '../mazes/maze_02.txt?raw'
-import maze03 from '../mazes/maze_03.txt?raw'
+import maze01 from '../../mazes/maze_01.txt?raw'
+import maze02 from '../../mazes/maze_02.txt?raw'
+import maze03 from '../../mazes/maze_03.txt?raw'
 
 /** Layout files: '#' is a wall, '.' is a passage. */
 const LAYOUTS: { name: string; source: string }[] = [

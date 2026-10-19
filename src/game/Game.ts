@@ -10,7 +10,7 @@ import { PowerDistributionWindow } from './windows/PowerDistributionWindow'
 import { UiWindow } from './windows/UiWindow'
 import { WindowManager } from './windows/WindowManager'
 import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
-import { WindowMaze } from './windows/WindowMaze'
+import { WindowMaze } from './windows/mazeComponents/WindowMaze'
 import { VictoryWindow } from './windows/VictoryWindow'
 
 import type { GameLanguage } from './windows/GameWindow'

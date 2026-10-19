@@ -40,4 +40,4 @@ In the maintenance utility, use Up/Down or 1–4 to select a component and Enter
 
 ## Integration
 
-Window code lives in the `windows/` directory. `GameWindow.ts`, `WindowManager.ts`, and the concrete window implementations are re-exported from there and imported by `Game.ts` as `./windows/<File>`. Keep `Game.ts`, `Input.ts`, and `fonts.ts` in `src/game/`, and do not move the font asset.
+Window code lives in the `windows/` directory. `GameWindow.ts`, `WindowManager.ts`, and the concrete window implementations are re-exported from there and imported by `Game.ts` as `./windows/<File>`. The bus-bypass maze puzzle and its building blocks (`WindowMaze.ts`, `MazeField.ts`, `MazeCell.ts`, `ScanWave.ts`, `GlyphRain.ts`) live in `windows/mazeComponents/`. Keep `Game.ts`, `Input.ts`, and `fonts.ts` in `src/game/`, and do not move the font asset.

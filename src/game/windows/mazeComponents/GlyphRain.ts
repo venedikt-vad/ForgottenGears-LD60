@@ -1,4 +1,4 @@
-import { FONT_FAMILY } from '../fonts'
+import { FONT_FAMILY } from '../../fonts'
 import type { Rect } from './MazeField'
 
 // Same pool the untouched maze tiles churn through.
