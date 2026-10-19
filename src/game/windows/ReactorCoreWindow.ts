@@ -330,9 +330,9 @@ export class ReactorCoreWindow implements GameWindow {
       if (this.stabilitySamples.length > STABILITY_SAMPLES) this.stabilitySamples.shift()
     }
 
-    // Return to console on request.
+    // Return to the maintenance UI on request.
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
-      this.manager?.show('console')
+      this.manager?.show('ui')
       return
     }
 
@@ -562,7 +562,7 @@ export class ReactorCoreWindow implements GameWindow {
     ctx.font = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
     ctx.fillStyle = COLORS.dim
     ctx.fillText('REACTION CONTROL // LASER ALIGNMENT', MARGIN, MARGIN + fontSize * 1.5)
-    ctx.fillText('DRAG RING — ROTATE · ESC / C — CONSOLE', MARGIN, height - MARGIN - fontSize * 0.6)
+    ctx.fillText('DRAG RING — ROTATE · ESC / C — UI', MARGIN, height - MARGIN - fontSize * 0.6)
 
     ctx.restore()
   }

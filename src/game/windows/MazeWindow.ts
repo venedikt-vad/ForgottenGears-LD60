@@ -138,7 +138,7 @@ export class WindowMaze implements GameWindow {
     input.consumeWheelDelta()
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
-      this.manager?.show('console')
+      this.manager?.show('ui')
       return
     }
 
@@ -286,8 +286,8 @@ export class WindowMaze implements GameWindow {
     ctx.fillStyle = COLORS.dim
     ctx.fillText(
       this.language === 'ru'
-        ? 'МЫШЬ: ВЕСТИ   Q: СКАН   D: СХЕМА   ESC / C: КОНСОЛЬ'
-        : 'MOUSE: TRACE   Q: SCAN   D: SCHEMATIC   ESC / C: CONSOLE',
+        ? 'МЫШЬ: ВЕСТИ   Q: СКАН   D: СХЕМА   ESC / C: UI'
+        : 'MOUSE: TRACE   Q: SCAN   D: SCHEMATIC   ESC / C: UI',
       margin + lineHeight,
       height - margin - lineHeight,
     )

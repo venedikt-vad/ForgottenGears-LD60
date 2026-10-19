@@ -6,7 +6,7 @@ utility, then boot the machine.
 
 Almost everything happens in two places: the **BIOS console** (a terminal) and the
 **maintenance UI** (a windowed panel with minigames). Press **C** or **Escape** in
-any minigame window to return to the console — your progress is always kept.
+any minigame window to return to the maintenance UI — your progress is always kept.
 
 ---
 
@@ -49,7 +49,7 @@ core there are **six activation points** — two on each laser's path.
 The node bars on the right show per-point progress; the stability gauge on the left
 climbs as more points are lit.
 
-Press **C** or **Escape** to return to the console.
+Press **C** or **Escape** to return to the maintenance UI.
 
 ---
 
@@ -78,7 +78,7 @@ and five outputs on the board edges:
 
 The puzzle is solved when the status reads **GRID STABLE** (3/5 online, 90%).
 
-Press **C** or **Escape** to return to the console.
+Press **C** or **Escape** to return to the maintenance UI.
 
 ---
 
@@ -104,7 +104,7 @@ Correct entries turn green; wrong ones stay red. Use **Backspace** to fix a
 mistake. Fill in every red cell — the table locks and reads **SOLVED** when all
 counts are correct.
 
-Press **C** or **Escape** to return to the console.
+Press **C** or **Escape** to return to the maintenance UI.
 
 ---
 
@@ -129,13 +129,13 @@ failed CRC validation and needs one command restored.
    ```
 
    Letters are converted to uppercase automatically. As soon as you type the final
-   parenthesis, the file is saved and the game returns you to the console — no
-   `:w` or `:check` needed.
+   parenthesis, the file is saved and the game returns you to the maintenance UI —
+   no `:w` or `:check` needed.
 
 Do not modify the other lines; the command must be the only executable line in the
 file.
 
-Press **C** or **Escape** to return to the console at any time.
+Press **C** or **Escape** to return to the maintenance UI at any time.
 
 ---
 
@@ -156,14 +156,13 @@ A hidden maze blocks the actuator bus. The field looks uniform until you scan it
    backtrack and take a different turn.
 5. Reaching the exit solves the puzzle — the panel reads **BUS BYPASS RESTORED**.
 
-Press **U** to jump back to the maintenance UI, or **C** / **Escape** for the
-console.
+Press **U**, **C** or **Escape** to jump back to the maintenance UI.
 
 ---
 
 ## Step 7 — Start the robot
 
-Return to the console (press **C** in any window) and type:
+Return to the console (press **C** or **Escape** in the maintenance UI) and type:
 
 ```
 start

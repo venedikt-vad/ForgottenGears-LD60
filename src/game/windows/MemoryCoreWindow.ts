@@ -142,7 +142,7 @@ export class MemoryCoreWindow implements GameWindow {
     this.appearTime += dt
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
-      this.manager?.show('console')
+      this.manager?.show('ui')
       return
     }
 
@@ -303,7 +303,7 @@ export class MemoryCoreWindow implements GameWindow {
     ctx.fillStyle = COLORS.dim
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
-    ctx.fillText('CLICK / ARROWS — SELECT   ·   TYPE — FILL   ·   ESC / C — CONSOLE', margin, height - margin - baseSize * 0.6)
+    ctx.fillText('CLICK / ARROWS — SELECT   ·   TYPE — FILL   ·   ESC / C — UI', margin, height - margin - baseSize * 0.6)
 
     ctx.restore()
   }

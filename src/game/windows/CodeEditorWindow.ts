@@ -578,12 +578,12 @@ export class CodeEditorWindow implements GameWindow {
       ? [
           { title: '1. ФАЙЛ', detail: 'В начале выделен файл ИНСТРУКЦИЯ. Нажмите стрелку вниз, затем Enter, чтобы открыть драйвер.' },
           { title: '2. ВВОД', detail: 'Нажмите i и введите одну строку: RESTORE_MOTION_PROFILE()' },
-          { title: 'ГОТОВО', detail: 'Ввод автоматически становится заглавным. Команда сохранится сама, а игра вернётся в консоль. :check и :w не нужны.' },
+          { title: 'ГОТОВО', detail: 'Ввод автоматически становится заглавным. Команда сохранится сама, а игра вернётся в панель обслуживания. :check и :w не нужны.' },
         ]
       : [
           { title: '1. FILE', detail: 'The INSTRUCTIONS file is selected first. Press Down, then Enter, to open the driver.' },
           { title: '2. INPUT', detail: 'Press i and type one line: RESTORE_MOTION_PROFILE()' },
-          { title: 'DONE', detail: 'Input becomes uppercase automatically. The command is saved and the game returns to the console. No :check or :w is needed.' },
+          { title: 'DONE', detail: 'Input becomes uppercase automatically. The command is saved and the game returns to the maintenance UI. No :check or :w is needed.' },
         ]
     // Wrap each help paragraph against the full width of the one large panel.
     // Keep a modest indent on continuation lines so the category labels remain clear.
@@ -1053,7 +1053,7 @@ export class CodeEditorWindow implements GameWindow {
             'СТРОКА 7 — ПУСТАЯ СТРОКА МЕЖДУ КОММЕНТАРИЯМИ.',
             'НЕ УДАЛЯЙТЕ ЗАГОЛОВОК И ДРУГИЕ СТРОКИ, НАЧИНАЮЩИЕСЯ С #.',
             'БУКВЫ АВТОМАТИЧЕСКИ ПЕРЕВОДЯТСЯ В ЗАГЛАВНЫЕ.',
-            'ПОСЛЕ ПОСЛЕДНЕЙ СКОБКИ ФАЙЛ СОХРАНИТСЯ, ИГРА ВЕРНЁТСЯ В КОНСОЛЬ.',
+            'ПОСЛЕ ПОСЛЕДНЕЙ СКОБКИ ФАЙЛ СОХРАНИТСЯ, ИГРА ВЕРНЁТСЯ В ПАНЕЛЬ ОБСЛУЖИВАНИЯ.',
           ]
         : [
             'INSTRUCTIONS',
@@ -1070,7 +1070,7 @@ export class CodeEditorWindow implements GameWindow {
             'LINE 7 IS THE EMPTY LINE BETWEEN THE COMMENTS.',
             'KEEP THE HEADER AND OTHER LINES STARTING WITH #.',
             'LETTERS ARE AUTOMATICALLY CONVERTED TO UPPERCASE.',
-            'AFTER THE FINAL PARENTHESIS, THE FILE IS SAVED AND THE GAME RETURNS TO CONSOLE.',
+            'AFTER THE FINAL PARENTHESIS, THE FILE IS SAVED AND THE GAME RETURNS TO THE MAINTENANCE UI.',
           ]
     }
 

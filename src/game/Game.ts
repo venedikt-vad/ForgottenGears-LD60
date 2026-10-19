@@ -409,7 +409,7 @@ export class Game {
     const fileSystem = new VirtualFileSystem()
     const codeEditor = new CodeEditorWindow({
       fileSystem,
-      returnWindowId: 'console',
+      returnWindowId: 'ui',
       onValidate: (_path, valid) => {
         if (valid) this.robotSystem.completeMotionProfile()
       },

@@ -109,7 +109,7 @@ export class WindowMaze implements GameWindow {
     input.consumeWheelDelta()
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
-      this.manager?.show('console')
+      this.manager?.show('ui')
       return
     }
     if (input.wasPressed('KeyU')) {
@@ -226,8 +226,8 @@ export class WindowMaze implements GameWindow {
     ctx.font = smallFont
     ctx.fillStyle = this.solved ? COLORS.success : COLORS.dim
     const controls = this.solved
-      ? (this.language === 'ru' ? 'ОБХОД ШИНЫ ВОССТАНОВЛЕН  ·  U: UI  ·  ESC / C: КОНСОЛЬ' : 'BUS BYPASS RESTORED  ·  U: UI  ·  ESC / C: CONSOLE')
-      : (this.language === 'ru' ? 'МЫШЬ: ВЕСТИ ОТ ВХОДА ДО ВЫХОДА  ·  Q: СКАН  ·  U: UI  ·  ESC: КОНСОЛЬ' : 'MOUSE: TRACE ENTRANCE TO EXIT  ·  Q: SCAN  ·  U: UI  ·  ESC: CONSOLE')
+      ? (this.language === 'ru' ? 'ОБХОД ШИНЫ ВОССТАНОВЛЕН  ·  U: UI  ·  ESC / C: UI' : 'BUS BYPASS RESTORED  ·  U: UI  ·  ESC / C: UI')
+      : (this.language === 'ru' ? 'МЫШЬ: ВЕСТИ ОТ ВХОДА ДО ВЫХОДА  ·  Q: СКАН  ·  U: UI  ·  ESC: UI' : 'MOUSE: TRACE ENTRANCE TO EXIT  ·  Q: SCAN  ·  U: UI  ·  ESC: UI')
     ctx.fillText(this.fitText(ctx, controls, width - margin * 2), margin + lineHeight, height - margin - lineHeight)
     ctx.globalAlpha = 1
     ctx.restore()

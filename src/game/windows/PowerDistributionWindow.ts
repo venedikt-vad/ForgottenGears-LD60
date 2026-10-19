@@ -283,7 +283,7 @@ export class PowerDistributionWindow implements GameWindow {
     this.advanceLinePoints(dt)
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
-      this.manager?.show('console')
+      this.manager?.show('ui')
       return
     }
 
@@ -351,7 +351,7 @@ export class PowerDistributionWindow implements GameWindow {
     ctx.textAlign = 'left'
     ctx.font = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
     ctx.fillStyle = COLORS.dim
-    ctx.fillText('CLICK — ROTATE · ARROWS / SPACE — SELECT · ESC — CONSOLE', MARGIN, height - MARGIN - lineHeight)
+    ctx.fillText('CLICK — ROTATE · ARROWS / SPACE — SELECT · ESC / C — UI', MARGIN, height - MARGIN - lineHeight)
     ctx.restore()
   }
 
