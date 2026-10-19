@@ -2,6 +2,7 @@ import { FONT_FAMILY, LOST_LANGUAGE_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
+import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
 
 const COLORS = {
@@ -123,6 +124,7 @@ export class MemoryCoreWindow implements GameWindow {
   private answers = new Map<number, string>()
   private wasPointerDown = false
   private appearTime = APPEAR_TOTAL
+  private readonly popup = new SolvePopup()
 
   // Right-table data geometry in CSS px, for mouse hit testing.
   private hitX = 0
@@ -140,6 +142,7 @@ export class MemoryCoreWindow implements GameWindow {
 
   update(dt: number, input: Input): void {
     this.appearTime += dt
+    this.popup.update(dt, this.appearTime >= APPEAR_TOTAL && this.isSolved)
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
       this.manager?.show('ui')
@@ -304,6 +307,11 @@ export class MemoryCoreWindow implements GameWindow {
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     ctx.fillText('CLICK / ARROWS — SELECT   ·   TYPE — FILL   ·   ESC / C — UI', margin, height - margin - baseSize * 0.6)
+
+    this.popup.draw(ctx, width, height, {
+      title: 'MEMORY CORE IS RESTORED',
+      hint: 'TO RETURN PRESS C / ESC',
+    })
 
     ctx.restore()
   }

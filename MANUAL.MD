@@ -129,8 +129,8 @@ failed CRC validation and needs one command restored.
    ```
 
    Letters are converted to uppercase automatically. As soon as you type the final
-   parenthesis, the file is saved and the game returns you to the maintenance UI —
-   no `:w` or `:check` needed.
+   parenthesis, the file is saved and a green notice appears — press **C** or
+   **Escape** to return to the maintenance UI. No `:w` or `:check` needed.
 
 Do not modify the other lines; the command must be the only executable line in the
 file.

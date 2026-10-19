@@ -6,6 +6,7 @@ import { GlyphRain, type RainStyle } from './GlyphRain'
 import type { MazeCell, MazeCellStyle, MazeTileStyles } from './MazeCell'
 import { loadRandomMaze, type MazeField, type Rect } from './MazeField'
 import { ScanWave } from './ScanWave'
+import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
 
 const COLORS = {
@@ -73,6 +74,7 @@ export class WindowMaze implements GameWindow {
   private readonly onSolved?: () => void
   private appearTime = APPEAR_TOTAL
   private solved = false
+  private readonly popup = new SolvePopup()
   private field: MazeField = loadRandomMaze()
   private readonly rain = new GlyphRain()
   private waves: ScanWave[] = []
@@ -102,11 +104,13 @@ export class WindowMaze implements GameWindow {
     this.lastPointer = null
     this.solved = false
     this.appearTime = 0
+    this.popup.hide()
   }
 
   update(dt: number, input: Input): void {
     this.appearTime += dt
     input.consumeWheelDelta()
+    this.popup.update(dt, this.appearTime >= APPEAR_TOTAL && this.solved)
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
       this.manager?.show('ui')
@@ -230,6 +234,11 @@ export class WindowMaze implements GameWindow {
       : (this.language === 'ru' ? 'МЫШЬ: ВЕСТИ ОТ ВХОДА ДО ВЫХОДА  ·  Q: СКАН  ·  U: UI  ·  ESC: UI' : 'MOUSE: TRACE ENTRANCE TO EXIT  ·  Q: SCAN  ·  U: UI  ·  ESC: UI')
     ctx.fillText(this.fitText(ctx, controls, width - margin * 2), margin + lineHeight, height - margin - lineHeight)
     ctx.globalAlpha = 1
+
+    this.popup.draw(ctx, width, height, {
+      title: this.language === 'ru' ? 'ОБХОД ШИНЫ ВОССТАНОВЛЕН' : 'BUS BYPASS IS RESTORED',
+      hint: this.language === 'ru' ? 'ДЛЯ ВОЗВРАТА НАЖМИТЕ C / ESC' : 'TO RETURN PRESS C / ESC',
+    })
     ctx.restore()
   }
 

@@ -3,6 +3,7 @@ import { FONT_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
 import { VirtualFileSystem } from '../VirtualFileSystem'
 import type { GameLanguage, GameWindow } from './GameWindow'
+import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
 type EditorMode = 'NORMAL' | 'INSERT' | 'COMMAND' | 'SEARCH'
 type Pane = 'files' | 'editor'
@@ -219,6 +220,7 @@ export class CodeEditorWindow implements GameWindow {
   private messageIsError = false
   private appearTime = APPEAR_TOTAL
   private openedThisFrame = false
+  private readonly popup = new SolvePopup()
   private readonly maxUndo = 80
   private pointerCanvas: HTMLCanvasElement | null = null
   private pointerListenersAttached = false
@@ -250,6 +252,8 @@ export class CodeEditorWindow implements GameWindow {
     // Replay the appear animation each time the window is opened.
     this.appearTime = 0
     this.openedThisFrame = true
+    // A fresh visit never carries the restored notice over from a previous one.
+    this.popup.hide()
     this.refreshFileList()
     if (!this.currentPath && this.files.length) {
       this.loadFile(this.files[this.selectedFileIndex]!)
@@ -292,6 +296,17 @@ export class CodeEditorWindow implements GameWindow {
     }
     // Input is locked while the opening animation plays.
     if (this.appearTime < APPEAR_TOTAL) return
+    this.popup.update(_dt)
+    // Once the profile is restored the notice takes over: only C / Escape leave.
+    if (this.popup.active) {
+      for (const event of events) {
+        if (event.code === 'Escape' || event.code === 'KeyC') {
+          this.exitEditor()
+          return
+        }
+      }
+      return
+    }
     for (const event of events) {
       if (this.mode === 'INSERT') {
         this.handleInsertKey(this.normalizeEditorInputKey(event))
@@ -300,6 +315,8 @@ export class CodeEditorWindow implements GameWindow {
       } else {
         this.handleNormalKey(this.normalizeNormalModeKey(event))
       }
+      // The notice can latch mid-burst; swallow any keys that came with it.
+      if (this.popup.active) return
     }
   }
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
@@ -578,12 +595,12 @@ export class CodeEditorWindow implements GameWindow {
       ? [
           { title: '1. ФАЙЛ', detail: 'В начале выделен файл ИНСТРУКЦИЯ. Нажмите стрелку вниз, затем Enter, чтобы открыть драйвер.' },
           { title: '2. ВВОД', detail: 'Нажмите i и введите одну строку: RESTORE_MOTION_PROFILE()' },
-          { title: 'ГОТОВО', detail: 'Ввод автоматически становится заглавным. Команда сохранится сама, а игра вернётся в панель обслуживания. :check и :w не нужны.' },
+          { title: 'ГОТОВО', detail: 'Ввод автоматически становится заглавным. Команда сохранится сама; после этого нажмите C или ESC, чтобы вернуться в панель обслуживания. :check и :w не нужны.' },
         ]
       : [
           { title: '1. FILE', detail: 'The INSTRUCTIONS file is selected first. Press Down, then Enter, to open the driver.' },
           { title: '2. INPUT', detail: 'Press i and type one line: RESTORE_MOTION_PROFILE()' },
-          { title: 'DONE', detail: 'Input becomes uppercase automatically. The command is saved and the game returns to the maintenance UI. No :check or :w is needed.' },
+          { title: 'DONE', detail: 'Input becomes uppercase automatically. The command is saved; then press C or ESC to return to the maintenance UI. No :check or :w is needed.' },
         ]
     // Wrap each help paragraph against the full width of the one large panel.
     // Keep a modest indent on continuation lines so the category labels remain clear.
@@ -628,6 +645,11 @@ export class CodeEditorWindow implements GameWindow {
       }
     }
     ctx.restore()
+
+    this.popup.draw(ctx, width, height, {
+      title: this.language === 'ru' ? 'ПРОФИЛЬ ДВИЖЕНИЯ ВОССТАНОВЛЕН' : 'MOTION PROFILE IS RESTORED',
+      hint: this.language === 'ru' ? 'ДЛЯ ВОЗВРАТА НАЖМИТЕ C / ESC' : 'TO RETURN PRESS C / ESC',
+    })
     ctx.restore()
   }
   private attachPointerInput(canvas: HTMLCanvasElement): void {
@@ -647,6 +669,8 @@ export class CodeEditorWindow implements GameWindow {
   }
   private handleCanvasPointer(event: MouseEvent, openFile: boolean): void {
     if (event.button !== 0) return
+    // The restored notice is modal: pointer input stays dead until C / Escape.
+    if (this.popup.active) return
     // A click while the window is still opening just skips the animation.
     if (this.appearTime < APPEAR_TOTAL) {
       this.appearTime = APPEAR_TOTAL
@@ -1053,7 +1077,7 @@ export class CodeEditorWindow implements GameWindow {
             'СТРОКА 7 — ПУСТАЯ СТРОКА МЕЖДУ КОММЕНТАРИЯМИ.',
             'НЕ УДАЛЯЙТЕ ЗАГОЛОВОК И ДРУГИЕ СТРОКИ, НАЧИНАЮЩИЕСЯ С #.',
             'БУКВЫ АВТОМАТИЧЕСКИ ПЕРЕВОДЯТСЯ В ЗАГЛАВНЫЕ.',
-            'ПОСЛЕ ПОСЛЕДНЕЙ СКОБКИ ФАЙЛ СОХРАНИТСЯ, ИГРА ВЕРНЁТСЯ В ПАНЕЛЬ ОБСЛУЖИВАНИЯ.',
+            'ПОСЛЕ ПОСЛЕДНЕЙ СКОБКИ ФАЙЛ СОХРАНИТСЯ; ЗАТЕМ НАЖМИТЕ C ИЛИ ESC, ЧТОБЫ ВЕРНУТЬСЯ В ПАНЕЛЬ ОБСЛУЖИВАНИЯ.',
           ]
         : [
             'INSTRUCTIONS',
@@ -1070,7 +1094,7 @@ export class CodeEditorWindow implements GameWindow {
             'LINE 7 IS THE EMPTY LINE BETWEEN THE COMMENTS.',
             'KEEP THE HEADER AND OTHER LINES STARTING WITH #.',
             'LETTERS ARE AUTOMATICALLY CONVERTED TO UPPERCASE.',
-            'AFTER THE FINAL PARENTHESIS, THE FILE IS SAVED AND THE GAME RETURNS TO THE MAINTENANCE UI.',
+            'AFTER THE FINAL PARENTHESIS, THE FILE IS SAVED; THEN PRESS C OR ESC TO RETURN TO THE MAINTENANCE UI.',
           ]
     }
 
@@ -1108,7 +1132,7 @@ export class CodeEditorWindow implements GameWindow {
     this.checkResult = { ok: true, detail: '', text }
     this.setMessage(this.language === 'ru' ? 'ПРОФИЛЬ ДВИЖЕНИЯ ВОССТАНОВЛЕН.' : 'MOTION PROFILE RESTORED.')
     this.onValidate?.(this.currentPath, true)
-    this.exitEditor()
+    this.popup.show()
   }
 
   private normalizeEditorInputKey(event: InputKeyEvent): string {
@@ -1302,8 +1326,8 @@ export class CodeEditorWindow implements GameWindow {
   }
   private showHelp(): void {
     this.setMessage(this.language === 'ru'
-      ? 'ПРОХОЖДЕНИЕ: ↓, Enter, i, затем RESTORE_MOTION_PROFILE() — сохранение и возврат автоматические.'
-      : 'RECOVERY: Down, Enter, i, then RESTORE_MOTION_PROFILE() — save and return are automatic.')
+      ? 'ПРОХОЖДЕНИЕ: ↓, Enter, i, затем RESTORE_MOTION_PROFILE() — сохранение автоматическое; затем C или ESC — выход.'
+      : 'RECOVERY: Down, Enter, i, then RESTORE_MOTION_PROFILE() — save is automatic; then press C or ESC to return.')
   }
   private exitEditor(): void {
     this.mode = 'NORMAL'

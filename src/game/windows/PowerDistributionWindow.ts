@@ -2,6 +2,7 @@ import { FONT_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
+import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
 
 const COLORS = {
@@ -210,6 +211,7 @@ export class PowerDistributionWindow implements GameWindow {
   // Baselines for the connected / disconnected / power-loss sound edges.
   private prevOutputsOnline = 0
   private prevOverCapacity = false
+  private readonly popup = new SolvePopup()
 
   // Background diagonals: last known canvas size plus the sliding square points.
   private bgWidth = 0
@@ -281,6 +283,8 @@ export class PowerDistributionWindow implements GameWindow {
     this.appearTime += dt
     this.clock += dt
     this.advanceLinePoints(dt)
+    // The grid can be un-solved again by a later rotation; follow the win flag.
+    this.popup.update(dt, this.appearTime >= APPEAR_TOTAL && this.solved)
 
     if (input.wasPressed('Escape') || input.wasPressed('KeyC')) {
       this.manager?.show('ui')
@@ -352,6 +356,11 @@ export class PowerDistributionWindow implements GameWindow {
     ctx.font = `${Math.max(8, fontSize - 2)}px "${FONT_FAMILY}", monospace`
     ctx.fillStyle = COLORS.dim
     ctx.fillText('CLICK — ROTATE · ARROWS / SPACE — SELECT · ESC / C — UI', MARGIN, height - MARGIN - lineHeight)
+
+    this.popup.draw(ctx, width, height, {
+      title: 'POWER GRID IS RESTORED',
+      hint: 'TO RETURN PRESS C / ESC',
+    })
     ctx.restore()
   }
 

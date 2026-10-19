@@ -2,6 +2,7 @@ import { FONT_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { GameWindow } from './GameWindow'
+import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
 
 /** Renders custom content inside the reactor's inner circle. */
@@ -278,6 +279,7 @@ export class ReactorCoreWindow implements GameWindow {
   private wasPointerDown = false
   private solved = false
   private wasSolved = false
+  private readonly popup = new SolvePopup()
   private time = 0
   private appearTime = APPEAR_TOTAL
   private cx = 0
@@ -313,6 +315,7 @@ export class ReactorCoreWindow implements GameWindow {
       this.wasSolved = true
       playSfx('correct')
     }
+    this.popup.update(dt, this.appearTime >= APPEAR_TOTAL && this.solved)
 
     // Reactor does not scroll; discard wheel input so it never builds up.
     input.consumeWheelDelta()
@@ -469,6 +472,11 @@ export class ReactorCoreWindow implements GameWindow {
 
     this.drawCaptions(ctx, width, height)
     this.drawAngles(ctx, width, height)
+
+    this.popup.draw(ctx, width, height, {
+      title: 'REACTOR CORE IS RESTORED',
+      hint: 'TO RETURN PRESS C / ESC',
+    })
 
     ctx.restore()
   }
