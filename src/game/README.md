@@ -13,7 +13,7 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 
 ## Start sequence
 
-1. A small language window appears in the center of the screen. Use Up/Down (or W/S), then Enter. `1` selects Russian and `2` selects English.
+1. A small language window appears in the center of the screen with English pre-selected. Use Up/Down (or W/S) or hover with the mouse, then click or press Enter. `1` selects English and `2` selects Russian.
 2. The BIOS console prints a long, table-formatted POST report: hardware detection, memory integrity tests, module loading, subsystem status, repeated diagnostic passes, and unresolved error codes. It automatically follows new output unless you scroll up.
 3. When diagnostics finish, type `Y` and press Enter to read the operator manual, or type `N` and press Enter to skip it. This is text input; pressing the Y/N key alone does not select an answer.
 4. In the terminal, type a command and press Enter.
