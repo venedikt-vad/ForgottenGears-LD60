@@ -946,7 +946,10 @@ export class ConsoleWindow implements GameWindow {
     const blockers: string[] = []
     checklist.forEach((task, index) => {
       if (task.done) return
-      const component = system.getComponent(taskComponentIds[index] ?? '')
+      const componentId = taskComponentIds[index]
+      // Hint rows without a matching component (the final "type start" line) never block.
+      if (!componentId) return
+      const component = system.getComponent(componentId)
       blockers.push(`- ${task.label.toUpperCase()}${component ? ` [${component.id}]` : ''}`)
       if (component?.fault) blockers.push(`    ${ru ? 'ТЕКУЩАЯ ОШИБКА' : 'CURRENT FAULT'}: ${component.fault}`)
       if (component?.recommendation) blockers.push(`    ${ru ? 'ДЕЙСТВИЕ' : 'ACTION'}: ${component.recommendation}`)

@@ -848,6 +848,7 @@ export class UiWindow implements GameWindow {
           'Восстановить обход шины',
           'Починить память',
           'Починить алгоритм',
+          'Запустить робота: введите \'start\' в консоли',
         ]
       : [
           'Repair the reactor',
@@ -855,9 +856,12 @@ export class UiWindow implements GameWindow {
           'Restore the bus bypass',
           'Repair memory',
           'Repair the algorithm',
+          'Type \'start\' in console to start the robot',
         ]
     const done = this.checklistDone(manager)
-    return labels.map((label, index) => ({ label, done: done[index] ?? false }))
+    // The final row is a hint: it lights up once every repair is finished.
+    const flags = [...done, done.every(Boolean)]
+    return labels.map((label, index) => ({ label, done: flags[index] ?? false }))
   }
 
   /** Live win state for each recovery task, read from the matching puzzle window. */
