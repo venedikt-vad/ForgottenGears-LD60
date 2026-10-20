@@ -1,7 +1,7 @@
 import type { Input, InputKeyEvent } from '../Input'
 import { FONT_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
-import { VirtualFileSystem } from '../VirtualFileSystem'
+import { VirtualFileSystem, formatBytes, type VirtualFileErrorCode } from '../VirtualFileSystem'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
@@ -274,7 +274,9 @@ export class CodeEditorWindow implements GameWindow {
     const resolved = this.files.find((entry) => entry.toLowerCase() === normalized)
     if (!resolved || !this.readEditorFile(resolved)) {
       this.setMessage(
-        this.language === 'ru' ? `ФАЙЛ НЕ НАЙДЕН: ${path}` : `FILE NOT FOUND: ${path}`,
+        this.language === 'ru'
+          ? `ФАЙЛ НЕ НАЙДЕН: ${path} — СОЗДАЙТЕ ЕГО: :new ${path}`
+          : `FILE NOT FOUND: ${path} — CREATE IT WITH: :new ${path}`,
         true,
       )
       return false
@@ -366,8 +368,9 @@ export class CodeEditorWindow implements GameWindow {
       bodyTop + 7,
     )
     ctx.textAlign = 'left'
+    const meterHeight = Math.ceil(lineHeight * 1.7)
     const listTop = bodyTop + lineHeight * 1.7
-    const listBottom = bodyBottom - 5
+    const listBottom = bodyBottom - 5 - meterHeight
     const visibleFiles = Math.max(1, Math.floor((listBottom - listTop) / lineHeight))
     if (this.selectedFileIndex < this.fileScrollTop) this.fileScrollTop = this.selectedFileIndex
     if (this.selectedFileIndex >= this.fileScrollTop + visibleFiles) {
@@ -435,6 +438,49 @@ export class CodeEditorWindow implements GameWindow {
       ctx.textAlign = 'right'
       ctx.fillStyle = '#c68b17'
       ctx.fillText(this.extension(path).toUpperCase().slice(0, 5), fileX + fileWidth - 7, y)
+      ctx.textAlign = 'left'
+      ctx.restore()
+    }
+
+    // Storage quota meter pinned under the file list: count and size limits of
+    // the virtual filesystem, filled with the same amber palette as the panes.
+    {
+      const usage = this.fileSystem.getStorageUsage()
+      const ru = this.language === 'ru'
+      const nearLimit = usage.fileRatio >= 0.9 || usage.byteRatio >= 0.9
+      const watchLimit = usage.fileRatio >= 0.7 || usage.byteRatio >= 0.7
+      const meterX = fileX + 2
+      const meterWidth = Math.max(20, fileWidth - 6)
+      const meterTop = bodyBottom - 5 - meterHeight
+      const label = ru ? 'ХРАНИЛИЩЕ' : 'STORAGE'
+      const values = ru
+        ? `${usage.fileCount}/${usage.maxFiles} ФАЙЛ · ${formatBytes(usage.usedBytes, 'ru')} / ${formatBytes(usage.maxBytes, 'ru')}`
+        : `${usage.fileCount}/${usage.maxFiles} FILES · ${formatBytes(usage.usedBytes, 'en')} / ${formatBytes(usage.maxBytes, 'en')}`
+
+      ctx.save()
+      ctx.globalAlpha = textProgress
+      ctx.strokeStyle = '#76500f'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(fileX + 1, meterTop - 1)
+      ctx.lineTo(fileX + fileWidth - 3, meterTop - 1)
+      ctx.stroke()
+
+      ctx.font = tinyFont
+      ctx.textAlign = 'left'
+      ctx.fillStyle = nearLimit ? '#ff805b' : '#d59b20'
+      ctx.fillText(label, meterX, meterTop + 3)
+      ctx.textAlign = 'right'
+      ctx.fillStyle = nearLimit ? '#ff805b' : watchLimit ? '#ffd166' : '#c8e88a'
+      ctx.fillText(this.fitText(ctx, values, meterWidth - ctx.measureText(`${label} `).width - 4), meterX + meterWidth, meterTop + 3)
+
+      const barY = meterTop + Math.ceil(lineHeight * 1.05)
+      const barWidth = meterWidth
+      ctx.fillStyle = 'rgba(118, 80, 15, 0.75)'
+      ctx.fillRect(meterX, barY, barWidth, 4)
+      const fillRatio = Math.max(usage.fileRatio, usage.byteRatio)
+      ctx.fillStyle = nearLimit ? '#ff805b' : watchLimit ? '#ffd166' : '#8fd44a'
+      ctx.fillRect(meterX, barY, Math.max(1, barWidth * Math.min(1, fillRatio)), 4)
       ctx.textAlign = 'left'
       ctx.restore()
     }
@@ -914,6 +960,27 @@ export class CodeEditorWindow implements GameWindow {
         if (!argument) this.setMessage(this.language === 'ru' ? 'ФОРМАТ: :e! <ПУТЬ>' : 'USAGE: :e! <PATH>', true)
         else this.openFile(argument, true)
         break
+      case 'new': case 'touch':
+        if (!argument) {
+          this.setMessage(this.language === 'ru' ? 'ФОРМАТ: :new <ПУТЬ>' : 'USAGE: :new <PATH>', true)
+        } else {
+          const created = this.fileSystem.create(argument)
+          if (!created.ok) {
+            this.setMessage(
+              `${this.language === 'ru' ? 'НЕ СОЗДАН: ' : 'NOT CREATED: '}${this.fileSystemError(created.error)}`,
+              true,
+            )
+            break
+          }
+          this.refreshFileList()
+          this.loadFile(created.path ?? argument)
+          this.setMessage(
+            this.language === 'ru'
+              ? `СОЗДАН: ${created.path} — ПРАВЬТЕ И СОХРАНЯЙТЕ :w`
+              : `CREATED: ${created.path} — EDIT AND SAVE WITH :w`,
+          )
+        }
+        break
       case 'set':
         if (argument.toLowerCase() === 'number' || argument.toLowerCase() === 'nu') {
           this.showLineNumbers = true
@@ -931,9 +998,9 @@ export class CodeEditorWindow implements GameWindow {
   }
   private completeEditorCommand(): void {
     const raw = this.commandLine
-    const match = /^(e|edit|e!)\s+(.+)$/i.exec(raw)
+    const match = /^(e|edit|e!|new|touch)\s+(.+)$/i.exec(raw)
     if (!match) {
-      const candidates = ['w', 'wq', 'q', 'q!', 'e ', 'e! ', 'check', 'help', 'set number', 'set nonumber']
+      const candidates = ['w', 'wq', 'q', 'q!', 'e ', 'e! ', 'new ', 'touch ', 'check', 'help', 'set number', 'set nonumber']
       const prefix = raw.toLowerCase()
       const next = candidates.find((candidate) => candidate.toLowerCase().startsWith(prefix) && candidate !== raw)
       if (next) this.commandLine = next.toUpperCase()
@@ -976,9 +1043,16 @@ export class CodeEditorWindow implements GameWindow {
       return false
     }
     const text = this.buffer.join('\n')
-    const success = this.fileSystem.write(this.currentPath, text)
-    if (!success) {
-      this.setMessage(this.language === 'ru' ? 'ОШИБКА СОХРАНЕНИЯ: ФАЙЛ НЕ НАЙДЕН' : 'SAVE ERROR: FILE NOT FOUND', true)
+    const result = this.fileSystem.writeEx(this.currentPath, text)
+    if (!result.ok) {
+      if (result.error === 'NOT_FOUND') {
+        this.setMessage(this.language === 'ru' ? 'ОШИБКА СОХРАНЕНИЯ: ФАЙЛ НЕ НАЙДЕН' : 'SAVE ERROR: FILE NOT FOUND', true)
+      } else {
+        this.setMessage(
+          `${this.language === 'ru' ? 'ОШИБКА СОХРАНЕНИЯ: ' : 'SAVE ERROR: '}${this.fileSystemError(result.error)}`,
+          true,
+        )
+      }
       return false
     }
     this.savedText = text
@@ -1321,8 +1395,8 @@ export class CodeEditorWindow implements GameWindow {
     this.mode = 'COMMAND'
     this.commandLine = ''
     this.setMessage(this.language === 'ru'
-      ? 'КОМАНДА: :w :q :wq :e <путь> :check :help'
-      : 'COMMAND: :w :q :wq :e <path> :check :help')
+      ? 'КОМАНДА: :w :q :wq :e <путь> :new <путь> :check :help'
+      : 'COMMAND: :w :q :wq :e <path> :new <path> :check :help')
   }
   private showHelp(): void {
     this.setMessage(this.language === 'ru'
@@ -1357,6 +1431,31 @@ export class CodeEditorWindow implements GameWindow {
   private setMessage(message: string, error = false): void {
     this.message = message
     this.messageIsError = error
+  }
+
+  /** Localized text for a virtual-filesystem quota or path error. */
+  private fileSystemError(error: VirtualFileErrorCode | undefined): string {
+    const ru = this.language === 'ru'
+    switch (error) {
+      case 'NOT_FOUND':
+        return ru ? 'ПУТЬ НЕ НАЙДЕН' : 'PATH NOT FOUND'
+      case 'ALREADY_EXISTS':
+        return ru ? 'ФАЙЛ УЖЕ СУЩЕСТВУЕТ' : 'FILE ALREADY EXISTS'
+      case 'PARENT_MISSING':
+        return ru ? 'КАТАЛОГ НЕ СУЩЕСТВУЕТ' : 'PARENT DIRECTORY DOES NOT EXIST'
+      case 'INVALID_NAME':
+        return ru ? 'НЕДОПУСТИМОЕ ИМЯ ФАЙЛА' : 'INVALID FILE NAME'
+      case 'FILE_LIMIT':
+        return ru ? 'ДОСТИГНУТ ЛИМИТ ФАЙЛОВ' : 'FILE LIMIT REACHED'
+      case 'FILE_TOO_LARGE':
+        return ru ? 'ФАЙЛ СЛИШКОМ БОЛЬШОЙ ДЛЯ ХРАНИЛИЩА' : 'FILE IS TOO LARGE FOR STORAGE'
+      case 'NO_SPACE':
+        return ru ? 'ХРАНИЛИЩЕ ЗАПОЛНЕНО' : 'STORAGE FULL'
+      case 'PROTECTED':
+        return ru ? 'СИСТЕМНЫЙ ФАЙЛ ЗАЩИЩЁН' : 'SYSTEM FILE IS PROTECTED'
+      default:
+        return ru ? 'ОПЕРАЦИЯ ОТКЛОНЕНА' : 'OPERATION REFUSED'
+    }
   }
   private fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
     if (maxWidth <= 0) return ''

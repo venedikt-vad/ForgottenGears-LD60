@@ -3,11 +3,79 @@ export type VirtualFileLanguage = 'ru' | 'en'
 interface VirtualFile {
   path: string
   content: Record<VirtualFileLanguage, string>
+  /** Session-created files may be renamed and removed; shipped files are protected. */
+  user?: boolean
 }
 
 export interface VirtualFileMatch {
   path: string
   preview: string
+}
+
+export type VirtualFileErrorCode =
+  | 'NOT_FOUND'
+  | 'ALREADY_EXISTS'
+  | 'PARENT_MISSING'
+  | 'INVALID_NAME'
+  | 'FILE_LIMIT'
+  | 'FILE_TOO_LARGE'
+  | 'NO_SPACE'
+  | 'PROTECTED'
+  | 'DIR_LIMIT'
+  | 'DIR_NOT_EMPTY'
+
+export interface VirtualFileResult {
+  ok: boolean
+  error?: VirtualFileErrorCode
+  /** Normalized path the operation applied to, when it is known. */
+  path?: string
+}
+
+export interface VirtualStorageUsage {
+  fileCount: number
+  maxFiles: number
+  directoryCount: number
+  maxDirectories: number
+  usedBytes: number
+  maxBytes: number
+  largestFileBytes: number
+  /** 0..1 fill ratios for progress bars. */
+  fileRatio: number
+  byteRatio: number
+}
+
+/**
+ * Hard caps for the in-memory filesystem. Everything lives in JS memory, so the
+ * quotas keep a long session from growing without bound and stalling the frame.
+ */
+export const VFS_LIMITS = {
+  maxFiles: 48,
+  maxFileBytes: 16 * 1024,
+  maxTotalBytes: 128 * 1024,
+  maxDirectories: 32,
+} as const
+
+/** UTF-8 size of a string without allocating an encoder buffer. */
+export function byteLength(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i)
+    if (code < 0x80) bytes += 1
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      // Surrogate pair: 4 UTF-8 bytes, and the low surrogate is skipped.
+      bytes += 4
+      i += 1
+    } else bytes += 3
+  }
+  return bytes
+}
+
+/** Human-readable size with localized units, used by every storage readout. */
+export function formatBytes(bytes: number, language: VirtualFileLanguage = 'ru'): string {
+  if (bytes < 1024) return `${bytes} ${language === 'ru' ? 'Б' : 'B'}`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} ${language === 'ru' ? 'КБ' : 'KB'}`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} ${language === 'ru' ? 'МБ' : 'MB'}`
 }
 
 /**
@@ -37,6 +105,9 @@ export class VirtualFileSystem {
     '/var/log',
   ])
 
+  /** Session-created directories; only these can be removed with rmdir. */
+  private readonly userDirectories = new Set<string>()
+
   private readonly files: VirtualFile[] = [
     {
       path: '/manual/operator.txt',
@@ -50,10 +121,19 @@ info <ID>            справка по компоненту
 status               общее состояние системы
 diagnostics          отчёт неисправностей и зависимостей
 ls [путь]            список каталогов и файлов
+cd <путь>            перейти в каталог (как в cmd); cd .. — вверх
+pwd                  показать текущий каталог
+mkdir <путь>         создать каталог
+rmdir <путь>         удалить пустой созданный вами каталог
 cat <путь>           прочитать файл
+touch <путь>         создать пустой файл
+rm <путь>            удалить созданный вами файл
+mv <откуда> <куда>   переименовать или переместить файл
 find <слово>         поиск по путям и содержимому файлов
+df                   занятость хранилища и квоты
 vim [путь]           открыть Vim-подобный редактор исходников
 ui                   открыть панель обслуживания
+tasks                диспетчер задач: производительность и сервисы
 
 Рекомендуемый порядок:
 1. Прочитать отчёт POST и запустить diagnostics.
@@ -61,7 +141,9 @@ ui                   открыть панель обслуживания
 3. Не включать движение до проверки охлаждения.
 4. После каждого крупного изменения повторять diagnostics.
 
-Чтение доступно из консоли; исходники .drv/.seq можно редактировать через vim. Изменения хранятся в текущем сеансе. Пути начинаются с /.
+Чтение доступно из консоли; исходники .drv/.seq можно редактировать через vim. Изменения хранятся в текущем сеансе.
+Пути считаются от текущего каталога (cd/pwd); абсолютные пути начинаются с /.
+Хранилище ограничено (файлы, каталоги, размер файла и общий объём); превышение отклоняется. Статус квот показывает df и метр в шапке.
 Имена команд и путей нечувствительны к регистру.`,
         en: `ROBOT OS / OPERATOR QUICK REFERENCE
 ===================================
@@ -72,9 +154,19 @@ info <ID>            component information
 status               overall system status
 diagnostics          fault and dependency report
 ls [path]            list directories and files
+cd <path>            change directory (like cmd); cd .. — go up
+pwd                  print the current directory
+mkdir <path>         create a directory
+rmdir <path>         remove an empty directory you created
 cat <path>           read a file
+touch <path>         create an empty file
+rm <path>            delete a file you created
+mv <from> <to>       rename or move a file
 find <term>          search file paths and contents
+df                   storage usage and quotas
+vim [path]           open the Vim-like source editor
 ui                   open service toolbar
+tasks                task manager: performance and services
 
 Recommended order:
 1. Read the POST report and run diagnostics.
@@ -82,7 +174,9 @@ Recommended order:
 3. Do not enable motion before checking cooling.
 4. Run diagnostics again after each major change.
 
-Source .drv/.seq files can be edited with vim; changes persist in the current game session. Paths start at /.
+Source .drv/.seq files can be edited with vim; changes persist in the current game session.
+File-command paths resolve from the current directory (cd/pwd); absolute paths start with /.
+Storage is limited (files, directories, per-file size, total size); over-quota writes are refused. Run df or watch the header meter for usage.
 Commands and paths are case-insensitive.`,
       },
     },
@@ -609,17 +703,203 @@ Verify the command profile before diagnosing the mechanics.`,
 
   /** Save text into an existing virtual file. No host filesystem is accessed. */
   write(path: string, content: string, language?: VirtualFileLanguage): boolean {
+    return this.writeEx(path, content, language).ok
+  }
+
+  /** Save text and report why the write was refused (quota, missing file, ...). */
+  writeEx(path: string, content: string, language?: VirtualFileLanguage): VirtualFileResult {
     const normalized = this.normalizePath(path)
     const file = this.fileByPath.get(normalized)
-    if (!file) return false
+    if (!file) return { ok: false, error: 'NOT_FOUND', path: normalized }
+
     const text = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const incoming = byteLength(text)
+    if (incoming > VFS_LIMITS.maxFileBytes) return { ok: false, error: 'FILE_TOO_LARGE', path: normalized }
+
+    const oldActive = language ? byteLength(file.content[language]) : byteLength(file.content.ru) + byteLength(file.content.en)
+    const newActive = language ? incoming : incoming * 2
+    const otherBytes = byteLength(file.content.ru) + byteLength(file.content.en) - oldActive
+    if (otherBytes + newActive > VFS_LIMITS.maxFileBytes) {
+      return { ok: false, error: 'FILE_TOO_LARGE', path: normalized }
+    }
+    if (this.usageBytes() - oldActive + newActive > VFS_LIMITS.maxTotalBytes) {
+      return { ok: false, error: 'NO_SPACE', path: normalized }
+    }
+
     if (language) {
       file.content[language] = text
     } else {
       file.content.ru = text
       file.content.en = text
     }
-    return true
+    return { ok: true, path: normalized }
+  }
+
+  /** Create a new in-memory file. Both language copies start with the same text. */
+  create(path: string, content = ''): VirtualFileResult {
+    const normalized = this.normalizePath(path)
+    const nameError = this.validateName(normalized)
+    if (nameError) return { ok: false, error: nameError, path: normalized }
+
+    if (this.fileByPath.has(normalized) || this.directories.has(normalized)) {
+      return { ok: false, error: 'ALREADY_EXISTS', path: normalized }
+    }
+    if (!this.directories.has(this.parentPath(normalized))) {
+      return { ok: false, error: 'PARENT_MISSING', path: normalized }
+    }
+
+    const text = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const incoming = byteLength(text)
+    if (incoming > VFS_LIMITS.maxFileBytes) return { ok: false, error: 'FILE_TOO_LARGE', path: normalized }
+    if (this.files.length + 1 > VFS_LIMITS.maxFiles) return { ok: false, error: 'FILE_LIMIT', path: normalized }
+    if (this.usageBytes() + incoming * 2 > VFS_LIMITS.maxTotalBytes) {
+      return { ok: false, error: 'NO_SPACE', path: normalized }
+    }
+
+    const file: VirtualFile = { path: normalized, content: { ru: text, en: text }, user: true }
+    this.files.push(file)
+    this.fileByPath.set(normalized, file)
+    return { ok: true, path: normalized }
+  }
+
+  /** Remove a session-created file. Shipped system files are protected. */
+  remove(path: string): VirtualFileResult {
+    const normalized = this.normalizePath(path)
+    const file = this.fileByPath.get(normalized)
+    if (!file) return { ok: false, error: 'NOT_FOUND', path: normalized }
+    if (!file.user) return { ok: false, error: 'PROTECTED', path: normalized }
+
+    this.files.splice(this.files.indexOf(file), 1)
+    this.fileByPath.delete(normalized)
+    return { ok: true, path: normalized }
+  }
+
+  /** Rename a session-created file. System files keep their shipped paths. */
+  rename(from: string, to: string): VirtualFileResult {
+    const source = this.normalizePath(from)
+    const target = this.normalizePath(to)
+    const file = this.fileByPath.get(source)
+    if (!file) return { ok: false, error: 'NOT_FOUND', path: source }
+    if (!file.user) return { ok: false, error: 'PROTECTED', path: source }
+    if (source === target) return { ok: true, path: source }
+
+    const nameError = this.validateName(target)
+    if (nameError) return { ok: false, error: nameError, path: target }
+    if (this.fileByPath.has(target) || this.directories.has(target)) {
+      return { ok: false, error: 'ALREADY_EXISTS', path: target }
+    }
+    if (!this.directories.has(this.parentPath(target))) {
+      return { ok: false, error: 'PARENT_MISSING', path: target }
+    }
+
+    this.files.splice(this.files.indexOf(file), 1)
+    this.fileByPath.delete(source)
+    file.path = target
+    this.files.push(file)
+    this.fileByPath.set(target, file)
+    return { ok: true, path: target }
+  }
+
+  exists(path: string): boolean {
+    return this.fileByPath.has(this.normalizePath(path))
+  }
+
+  /** True when the path names a directory of this filesystem. */
+  isDirectory(path: string): boolean {
+    return this.directories.has(this.normalizePath(path))
+  }
+
+  /**
+   * Resolve a user-entered path against the shell working directory, the same
+   * way cmd resolves relative paths: absolute inputs are normalized as-is,
+   * relative ones are joined onto `cwd` before `.` and `..` are applied.
+   */
+  resolvePath(cwd: string, path: string): string {
+    const raw = path.trim().replace(/\\/g, '/')
+    if (!raw) return this.normalizePath(cwd)
+    if (raw.startsWith('/')) return this.normalizePath(raw)
+    return this.normalizePath(`${cwd}/${raw}`)
+  }
+
+  /** Create a directory inside an existing one; the session may hold up to `VFS_LIMITS.maxDirectories`. */
+  makeDirectory(path: string): VirtualFileResult {
+    const normalized = this.normalizePath(path)
+    if (normalized === '/') return { ok: false, error: 'ALREADY_EXISTS', path: normalized }
+    const nameError = this.validateName(normalized)
+    if (nameError) return { ok: false, error: nameError, path: normalized }
+    if (this.directories.has(normalized) || this.fileByPath.has(normalized)) {
+      return { ok: false, error: 'ALREADY_EXISTS', path: normalized }
+    }
+    if (!this.directories.has(this.parentPath(normalized))) {
+      return { ok: false, error: 'PARENT_MISSING', path: normalized }
+    }
+    if (this.directories.size + 1 > VFS_LIMITS.maxDirectories) {
+      return { ok: false, error: 'DIR_LIMIT', path: normalized }
+    }
+    this.directories.add(normalized)
+    this.userDirectories.add(normalized)
+    return { ok: true, path: normalized }
+  }
+
+  /** Remove an empty session-created directory; shipped and non-empty ones stay. */
+  removeDirectory(path: string): VirtualFileResult {
+    const normalized = this.normalizePath(path)
+    if (normalized === '/') return { ok: false, error: 'PROTECTED', path: normalized }
+    if (!this.directories.has(normalized)) return { ok: false, error: 'NOT_FOUND', path: normalized }
+    if (!this.userDirectories.has(normalized)) return { ok: false, error: 'PROTECTED', path: normalized }
+
+    const hasChildren = [...this.directories, ...this.files.map((file) => file.path)]
+      .some((entry) => entry !== normalized && this.parentPath(entry) === normalized)
+    if (hasChildren) return { ok: false, error: 'DIR_NOT_EMPTY', path: normalized }
+
+    this.directories.delete(normalized)
+    this.userDirectories.delete(normalized)
+    return { ok: true, path: normalized }
+  }
+
+  /** Size metadata for one file; both language copies are counted. */
+  stat(path: string): { path: string; bytes: number; lines: number; user: boolean } | null {
+    const normalized = this.normalizePath(path)
+    const file = this.fileByPath.get(normalized)
+    if (!file) return null
+    const bytes = byteLength(file.content.ru) + byteLength(file.content.en)
+    return { path: file.path, bytes, lines: file.content.ru.split('\n').length, user: Boolean(file.user) }
+  }
+
+  /** Current fill levels against the quotas, used by every storage UI. */
+  getStorageUsage(): VirtualStorageUsage {
+    let largest = 0
+    for (const file of this.files) {
+      const size = byteLength(file.content.ru) + byteLength(file.content.en)
+      if (size > largest) largest = size
+    }
+    const usedBytes = this.usageBytes()
+    const fileCount = this.files.length
+    return {
+      fileCount,
+      maxFiles: VFS_LIMITS.maxFiles,
+      directoryCount: this.directories.size,
+      maxDirectories: VFS_LIMITS.maxDirectories,
+      usedBytes,
+      maxBytes: VFS_LIMITS.maxTotalBytes,
+      largestFileBytes: largest,
+      fileRatio: Math.max(0, Math.min(1, fileCount / VFS_LIMITS.maxFiles)),
+      byteRatio: Math.max(0, Math.min(1, usedBytes / VFS_LIMITS.maxTotalBytes)),
+    }
+  }
+
+  private usageBytes(): number {
+    let total = 0
+    for (const file of this.files) total += byteLength(file.content.ru) + byteLength(file.content.en)
+    return total
+  }
+
+  private validateName(normalizedPath: string): VirtualFileErrorCode | null {
+    const name = normalizedPath.split('/').filter(Boolean).pop() ?? ''
+    if (!name || name.length > 64) return 'INVALID_NAME'
+    if (/[<>:"\\|?*]/.test(name)) return 'INVALID_NAME'
+    if (name.endsWith('.') || name.endsWith(' ')) return 'INVALID_NAME'
+    return null
   }
 
   find(query: string, language: VirtualFileLanguage = 'ru'): VirtualFileMatch[] {

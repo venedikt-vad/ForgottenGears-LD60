@@ -8,6 +8,7 @@ import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
 import { MemoryCoreWindow } from './windows/MemoryCoreWindow'
 import { PowerDistributionWindow } from './windows/PowerDistributionWindow'
 import { UiWindow } from './windows/UiWindow'
+import { TaskManagerWindow } from './windows/TaskManagerWindow'
 import { WindowManager } from './windows/WindowManager'
 import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
 import { WindowMaze } from './windows/mazeComponents/WindowMaze'
@@ -15,6 +16,7 @@ import { VictoryWindow } from './windows/VictoryWindow'
 
 import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem } from './VirtualFileSystem'
+import { RobotData } from './RobotData'
 
 export type RuntimeStatus = 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'CRITICAL' | 'MISSING' | 'LOCKED'
 export type RuntimeCategory = 'POWER' | 'COMPUTE' | 'OS' | 'SENSORS' | 'MOTION' | 'THERMAL' | 'SAFETY' | 'NETWORK' | 'BODY' | 'SYSTEM'
@@ -383,6 +385,8 @@ export class Game {
   private lastTime = 0
   private fontLoaded = false
   private bgMusic: HTMLAudioElement | null = null
+  /** Read-model shared by the interface windows; sampled once per frame. */
+  private robotData: RobotData | null = null
 
   private player = { x: 200, y: 200, size: 32, speed: 240 }
   private readonly onResize = () => this.resize()
@@ -407,6 +411,10 @@ export class Game {
     this.robotSystem.reset()
 
     const fileSystem = new VirtualFileSystem()
+    // Single read-model in front of RobotSystem + VirtualFileSystem; interface
+    // windows consume it instead of touching the raw state or the disk layer.
+    const robotData = new RobotData(this.robotSystem, fileSystem, () => this.windows.activeId)
+    this.robotData = robotData
     const codeEditor = new CodeEditorWindow({
       fileSystem,
       returnWindowId: 'ui',
@@ -415,7 +423,8 @@ export class Game {
       },
     })
     const consoleWindow = new ConsoleWindow(fileSystem, codeEditor, this.robotSystem)
-    const uiWindow = new UiWindow(this.robotSystem)
+    const uiWindow = new UiWindow(this.robotSystem, robotData)
+    const taskManagerWindow = new TaskManagerWindow(robotData)
     const victoryWindow = new VictoryWindow()
 
     // Existing puzzle windows keep their current constructors. Game.ts owns all
@@ -431,6 +440,7 @@ export class Game {
       consoleWindow.setLanguage(language)
       codeEditor.setLanguage(language)
       uiWindow.setLanguage(language)
+      taskManagerWindow.setLanguage(language)
       victoryWindow.setLanguage(language)
       maze.setLanguage(language)
       this.windows.show('console')
@@ -441,6 +451,7 @@ export class Game {
       .register(consoleWindow)
       .register(codeEditor)
       .register(uiWindow)
+      .register(taskManagerWindow)
       .register(reactor)
       .register(memoryCore)
       .register(powerDistribution)
@@ -505,9 +516,12 @@ export class Game {
     if (!this.running) return
     const dt = Math.min((time - this.lastTime) / 1000, 0.1)
     this.lastTime = time
+    const workStart = performance.now()
     this.update(dt)
     this.render()
     this.mirrorToGlow()
+    // Feed the task manager: work time vs. the real frame period.
+    this.robotData?.sampleFrame(performance.now() - workStart, dt * 1000)
     this.input.endFrame()
     requestAnimationFrame(this.loop)
   }

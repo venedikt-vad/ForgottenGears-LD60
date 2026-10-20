@@ -25,8 +25,9 @@ and press **Enter**. The robot-maintenance window opens.
 - Click **OPEN DEBUG** (or press **Enter** / **O**) to launch that component's
   repair minigame.
 
-You can also press **1–6** to filter by body part, **0** to show all, and **P** to
-jump straight to power distribution.
+You can also press **1–6** to filter by body part, **0** to show all, **P** to
+jump straight to power distribution, and **T** to open the task manager — a live
+view of the robot's performance, running services, and storage usage.
 
 The **TODO** checklist in the UI tracks the five recovery tasks. All five must be
 green before the robot will start.
@@ -190,12 +191,33 @@ victory screen appears.
 | `components` | List components and their current state |
 | `status` | Summary of faults and robot mode |
 | `ui` | Open the maintenance utility |
+| `tasks` | Open the task manager (performance, processes, storage) |
 | `vim` | Open the motion-profile editor |
 | `manual` | Print the operator manual |
 | `clear` | Clear the console screen |
 | `start` | Attempt to start the robot |
 
-**↑ / ↓** walks through command history; **Tab** autocompletes a command.
+### Filesystem commands
+
+The console also doubles as a small shell over the robot's in-memory storage
+(session files only — nothing is written to your disk):
+
+| Command | Effect |
+| --- | --- |
+| `ls [path]` | List a directory |
+| `cat <file>` | Print a file |
+| `touch <path>` | Create an empty file |
+| `rm <path>` | Delete a file you created (shipped files are protected) |
+| `mv <from> <to>` | Rename or move a file |
+| `find <name>` | Search files by name |
+| `df` | Storage usage against the quotas |
+
+The storage is limited (48 files, 16 KB per file, 128 KB total); the console
+header shows a live meter, and both the console and the editor warn you before
+a write would exceed a quota.
+
+**↑ / ↓** walks through command history; **Tab** autocompletes a command or a
+file path.
 
 ---
 

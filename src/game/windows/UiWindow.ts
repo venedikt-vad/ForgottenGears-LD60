@@ -3,6 +3,8 @@ import { ImageDrawer } from '../ImageDrawer'
 import { playSfx } from '../sfx'
 import type { Input } from '../Input'
 import type { RobotSystem, RuntimeComponent, RuntimeStatus } from '../Game'
+import type { RobotData } from '../RobotData'
+import { formatBytes } from '../VirtualFileSystem'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import type { WindowManager } from './WindowManager'
 
@@ -112,6 +114,8 @@ export class UiWindow implements GameWindow {
 
   private manager: WindowManager | null = null
   private readonly robotSystem: RobotSystem
+  /** Read-model for shared robot data; falls back to the raw state when absent. */
+  private readonly robotData: RobotData | null
   private language: GameLanguage = 'ru'
   private selectedPart: BodyPart = 'ALL'
   private selectedIndex = 0
@@ -136,13 +140,20 @@ export class UiWindow implements GameWindow {
   private readonly powerHistory: number[] = []
   private historyTimer = 0
 
-  constructor(robotSystem: RobotSystem) {
+  constructor(robotSystem: RobotSystem, robotData: RobotData | null = null) {
+    this.robotSystem = robotSystem
+    this.robotData = robotData
     this.robotSystem = robotSystem
     this.schemeImage.src = `${import.meta.env.BASE_URL}robot_scheme/scheme_01.png`
   }
 
   setLanguage(language: GameLanguage): void {
     this.language = language
+  }
+
+  /** Live component list; the shared RobotData read-model is preferred when wired. */
+  private components(): RuntimeComponent[] {
+    return this.robotData?.listComponents() ?? this.robotSystem.listComponents()
   }
 
   onShow(manager: WindowManager): void {
@@ -233,6 +244,7 @@ export class UiWindow implements GameWindow {
     if (input.wasPressed('ArrowRight')) this.cyclePart(1)
     if (input.wasPressed('Enter') || input.wasPressed('KeyO')) this.openSelectedComponent()
     if (input.wasPressed('KeyP')) this.openPowerRedistribution()
+    if (input.wasPressed('KeyT')) this.manager?.show('tasks')
 
     if (down && !this.wasPointerDown) {
       const p = input.pointerPosition
@@ -269,9 +281,15 @@ export class UiWindow implements GameWindow {
     )
 
     const counts = this.getUiCounts()
-    const countText = this.language === 'ru'
+    let countText = this.language === 'ru'
       ? `В НОРМЕ ${counts.normal}   ОТКЛЮЧЕНО ${counts.disabled}   ПОВРЕЖДЕНО ${counts.damaged}`
       : `NORMAL ${counts.normal}   DISABLED ${counts.disabled}   DAMAGED ${counts.damaged}`
+    const storage = this.robotData?.getStorage()
+    if (storage) {
+      countText += this.language === 'ru'
+        ? `   ДАННЫЕ ${formatBytes(storage.usedBytes, this.language)}`
+        : `   DATA ${formatBytes(storage.usedBytes, this.language)}`
+    }
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
     ctx.fillText(this.written('SERVICE MODE / LIVE COMPONENT STATE'), margin, margin + lineHeight * 1.25)
@@ -396,8 +414,8 @@ export class UiWindow implements GameWindow {
     ctx.font = smallFont
     ctx.fillStyle = COLORS.dim
     const footerHelp = this.language === 'ru'
-      ? '1–6: ЧАСТЬ ТЕЛА  ·  0: ВСЕ  ·  ↑/↓: КОМПОНЕНТ  ·  ENTER: ОТЛАДКА  ·  P: ПИТАНИЕ  ·  ESC: КОНСОЛЬ'
-      : '1–6: BODY PART  ·  0: ALL  ·  ↑/↓: COMPONENT  ·  ENTER: DEBUG  ·  P: POWER  ·  ESC: CONSOLE'
+      ? '1–6: ЧАСТЬ ТЕЛА  ·  0: ВСЕ  ·  ↑/↓: КОМПОНЕНТ  ·  ENTER: ОТЛАДКА  ·  P: ПИТАНИЕ  ·  T: ДИСПЕТЧЕР  ·  ESC: КОНСОЛЬ'
+      : '1–6: BODY PART  ·  0: ALL  ·  ↑/↓: COMPONENT  ·  ENTER: DEBUG  ·  P: POWER  ·  T: TASKS  ·  ESC: CONSOLE'
     ctx.fillText(this.fitText(ctx, this.written(footerHelp), width - margin * 2), margin, height - margin - lineHeight)
 
     ctx.restore()
@@ -437,7 +455,7 @@ export class UiWindow implements GameWindow {
   }
 
   private getFilteredComponents(): RuntimeComponent[] {
-    const components = this.robotSystem.listComponents().filter((component) => {
+    const components = this.components().filter((component) => {
       const isNormal = toUiStatus(this.effectiveStatus(component)) === 'normal'
       return isNormal || this.hasRegisteredMinigame(component)
     })
@@ -498,7 +516,7 @@ export class UiWindow implements GameWindow {
 
   private getUiCounts(): Record<UiStatus, number> {
     const counts: Record<UiStatus, number> = { normal: 0, disabled: 0, damaged: 0 }
-    for (const item of this.robotSystem.listComponents()) counts[toUiStatus(this.effectiveStatus(item))] += 1
+    for (const item of this.components()) counts[toUiStatus(this.effectiveStatus(item))] += 1
     return counts
   }
 
@@ -1019,7 +1037,7 @@ export class UiWindow implements GameWindow {
 
   private statusForPart(part: Exclude<BodyPart, 'ALL'>): RuntimeStatus {
     const ids = PARTS.find((item) => item.id === part)?.componentIds ?? []
-    const components = this.robotSystem.listComponents().filter((item) => ids.includes(item.id))
+    const components = this.components().filter((item) => ids.includes(item.id))
     if (components.some((item) => toUiStatus(this.effectiveStatus(item)) === 'damaged')) return 'CRITICAL'
     if (components.some((item) => toUiStatus(this.effectiveStatus(item)) === 'disabled')) return 'OFFLINE'
     return 'ONLINE'

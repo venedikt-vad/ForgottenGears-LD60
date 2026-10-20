@@ -5,10 +5,16 @@ import { FONT_FAMILY } from '../fonts'
 import type { GameLanguage, GameWindow } from './GameWindow'
 
 import type { WindowManager } from './WindowManager'
-import { VirtualFileSystem } from '../VirtualFileSystem'
+import { VirtualFileSystem, VFS_LIMITS, formatBytes, type VirtualFileErrorCode } from '../VirtualFileSystem'
 import type { CodeEditorWindow } from './CodeEditorWindow'
 import type { RobotSystem, RuntimeStatus } from '../Game'
 
+
+/** Commands whose argument is a filesystem path, used for Tab completion. */
+const PATH_COMMANDS = new Set(['vim', 'ls', 'cat', 'touch', 'rm', 'mv', 'cd', 'mkdir', 'rmdir'])
+
+/** Commands whose path argument is a directory, so completion offers folders only. */
+const DIRECTORY_ONLY_COMMANDS = new Set(['cd', 'mkdir', 'rmdir'])
 
 
 type ConsoleStage = 'boot' | 'manual-prompt' | 'manual-stream' | 'manual-wait' | 'terminal'
@@ -298,6 +304,9 @@ export class ConsoleWindow implements GameWindow {
 
   private command = ''
 
+  /** Shell working directory for relative paths; cd changes it, the prompt shows it. */
+  private cwd = '/'
+
   // Command history is retained for the lifetime of this console instance.
   private commandHistory: string[] = []
   private commandHistoryIndex = 0
@@ -355,6 +364,8 @@ export class ConsoleWindow implements GameWindow {
     this.manualQueued = false
 
     this.command = ''
+
+    this.cwd = '/'
 
     this.promptInput = ''
 
@@ -486,6 +497,37 @@ export class ConsoleWindow implements GameWindow {
 
 
     const ruleY = margin + lineHeight * 2 + 5
+
+    // Storage quota readout: the file count and size limits stay visible in the
+    // console header so the operator always knows how full the archive is.
+    if (width >= 720) {
+      const usage = this.fileSystem.getStorageUsage()
+      const ru = this.language === 'ru'
+      const nearLimit = usage.fileRatio >= 0.9 || usage.byteRatio >= 0.9
+      const watchLimit = usage.fileRatio >= 0.7 || usage.byteRatio >= 0.7
+      ctx.textAlign = 'right'
+      ctx.fillStyle = nearLimit ? '#ff7782' : watchLimit ? '#ffd166' : '#659e5c'
+      ctx.fillText(
+        `${ru ? 'ФАЙЛОВ' : 'FILES'}: ${usage.fileCount} / ${usage.maxFiles}`,
+        width - margin,
+        margin - 1,
+      )
+      ctx.fillText(
+        ru
+          ? `ОБЪЁМ: ${formatBytes(usage.usedBytes, 'ru')} / ${formatBytes(usage.maxBytes, 'ru')}`
+          : `SIZE: ${formatBytes(usage.usedBytes, 'en')} / ${formatBytes(usage.maxBytes, 'en')}`,
+        width - margin,
+        margin + lineHeight + 1,
+      )
+      const meterWidth = Math.min(180, Math.floor(width * 0.22))
+      const meterY = ruleY - 4
+      const meterX = width - margin - meterWidth
+      ctx.fillStyle = 'rgba(53, 96, 62, 0.85)'
+      ctx.fillRect(meterX, meterY, meterWidth, 3)
+      ctx.fillStyle = nearLimit ? '#ff7782' : watchLimit ? '#ffd166' : '#71f79f'
+      ctx.fillRect(meterX, meterY, Math.max(1, meterWidth * Math.max(usage.fileRatio, usage.byteRatio)), 3)
+      ctx.textAlign = 'left'
+    }
 
     this.drawRule(ctx, margin, ruleY, width - margin * 2)
 
@@ -755,11 +797,24 @@ export class ConsoleWindow implements GameWindow {
     const rest = commandMatch[2] ?? ''
     const normalizedCommand = enteredCommand.toLowerCase()
 
-    // `vim` is the only command that accepts a path argument.
-    if (normalizedCommand === 'vim' && rest.trim().length > 0) {
-      const argumentPrefix = rest.trim()
-      const candidates = this.fileSystem.getPathCandidates(argumentPrefix, true)
-      return candidates.map((path) => `${enteredCommand} ${path}`)
+    // `mv` completes each of its two path arguments; the other path commands
+    // use the whole argument. `find` takes a search term and `df` takes no arguments.
+    if (normalizedCommand === 'mv' && rest.trim().length > 0) {
+      const endsWithSpace = /\s$/.test(rest)
+      const tokens = rest.trim().split(/\s+/).filter(Boolean)
+      const prefix = endsWithSpace ? '' : (tokens.pop() ?? '')
+      const candidates = this.completePath(prefix)
+      return candidates.map((path) => [enteredCommand, ...tokens, path].join(' '))
+    }
+
+    if (PATH_COMMANDS.has(normalizedCommand)) {
+      const argumentText = rest.trim()
+      // Complete once an argument (or at least the separating space) is typed.
+      if (argumentText.length > 0 || /\s$/.test(rest)) {
+        const prefix = /\s$/.test(rest) ? '' : argumentText
+        const candidates = this.completePath(prefix, DIRECTORY_ONLY_COMMANDS.has(normalizedCommand))
+        return candidates.map((path) => `${enteredCommand} ${path}`)
+      }
     }
 
     if (rest.trim().length > 0) return []
@@ -771,9 +826,30 @@ export class ConsoleWindow implements GameWindow {
       .map((name) => `${leadingWhitespace}${name}`)
   }
 
+  /** Complete a typed path prefix relative to the working directory, keeping the typed form relative. */
+  private completePath(rawPrefix: string, directoriesOnly = false): string[] {
+    const typed = rawPrefix.trim()
+    // An empty prefix (or one ending in `/`) lists the directory itself;
+    // resolvePath strips the trailing slash, so it is restored here.
+    const listContents = typed === '' || typed.endsWith('/')
+    const resolved = this.fileSystem.resolvePath(this.cwd, typed || '.')
+    const absolutePrefix = listContents && resolved !== '/' ? `${resolved}/` : resolved
+    const candidates = this.fileSystem
+      .getPathCandidates(absolutePrefix, true)
+      .filter((path) => !directoriesOnly || this.fileSystem.isDirectory(path))
+
+    // A relative input keeps completing to relative paths; absolute stays absolute.
+    if (typed.startsWith('/') || !candidates.length) return candidates
+    const base = this.cwd === '/' ? '/' : `${this.cwd}/`
+    return candidates.map((path) => (path.startsWith(base) ? path.slice(base.length) : path))
+  }
+
   private getCommandNames(): string[] {
-    // Keep help and command completion limited to the seven requested commands.
-    return ['help', 'components', 'ui', 'status', 'vim', 'manual', 'clear', 'start']
+    // File/directory commands plus the window/system commands of this console.
+    return [
+      'help', 'components', 'ui', 'status', 'vim', 'manual', 'clear', 'start',
+      'ls', 'cd', 'pwd', 'cat', 'touch', 'rm', 'mv', 'mkdir', 'rmdir', 'find', 'df', 'tasks',
+    ]
   }
 
   private clearCompletionState(): void {
@@ -787,7 +863,6 @@ export class ConsoleWindow implements GameWindow {
     const command = (parts.shift() ?? '').toLowerCase()
     const rawArgument = parts.join(' ').trim()
     const path = rawArgument || '/opt/firmware/motion/оптимизатор_акселерации_1.0.18.drv'
-
     switch (command) {
       case 'help':
         this.appendLines(this.language === 'ru'
@@ -796,12 +871,27 @@ export class ConsoleWindow implements GameWindow {
               '  help       — список команд',
               '  components — текущее состояние компонентов',
               '  ui         — открыть панель обслуживания',
+              '  tasks      — открыть диспетчер задач и производительности',
               '  status     — сводка состояния робота',
-              '  vim [путь] — открыть редактор',
               '  manual     — инструкция оператора',
               '  clear      — полностью очистить экран консоли',
               '  start      — запуск робота; при отказе выводятся блокирующие проблемы.',
               '',
+              'ФАЙЛЫ:',
+              '  ls [путь]      — содержимое каталога',
+              '  cd <путь>      — перейти в каталог (как в cmd); cd .. — вверх, cd — текущий путь',
+              '  pwd            — показать текущий каталог',
+              '  cat <путь>     — прочитать файл',
+              '  touch <путь>   — создать новый файл',
+              '  mkdir <путь>   — создать каталог',
+              '  rmdir <путь>   — удалить пустой созданный вами каталог',
+              '  rm <путь>      — удалить созданный вами файл',
+              '  mv <а> <б>     — переименовать созданный файл',
+              '  find <слово>   — поиск по путям и содержимому',
+              '  df             — лимиты и заполнение файлового хранилища',
+              '  vim [путь]     — открыть редактор',
+              '',
+              'ПУТИ: команды файлов работают с текущего каталога; абсолютные начинаются с /.',
               'УПРАВЛЕНИЕ: ↑/↓ — история команд; TAB — автодополнение.',
               '',
             ]
@@ -810,12 +900,27 @@ export class ConsoleWindow implements GameWindow {
               '  help       — list commands',
               '  components — live component status',
               '  ui         — open maintenance UI',
+              '  tasks      — open the task manager and performance screen',
               '  status     — robot status summary',
-              '  vim [path] — open editor',
               '  manual     — operator manual',
               '  clear      — clear the console screen completely',
               '  start      — start the robot; blocking faults are listed if startup is refused.',
               '',
+              'FILES:',
+              '  ls [path]    — list a directory',
+              '  cd <path>    — change directory (like cmd); cd .. — up, cd — print the current path',
+              '  pwd          — print the current directory',
+              '  cat <path>   — read a file',
+              '  touch <path> — create a new file',
+              '  mkdir <path> — create a directory',
+              '  rmdir <path> — remove an empty directory you created',
+              '  rm <path>    — delete a file you created',
+              '  mv <a> <b>   — rename a file you created',
+              '  find <term>  — search paths and contents',
+              '  df           — storage quotas and fill levels',
+              '  vim [path]   — open the editor',
+              '',
+              'PATHS: file commands resolve from the current directory; absolute paths start with /.',
               'CONTROLS: ↑/↓ — command history; TAB — autocomplete.',
               '',
             ])
@@ -836,23 +941,90 @@ export class ConsoleWindow implements GameWindow {
         this.printRobotStatus()
         return
 
-      case 'vim':
+      case 'vim': {
         if (!this.codeEditor) {
           this.appendLines(this.language === 'ru'
             ? ['РЕДАКТОР НЕ ПОДКЛЮЧЁН.', 'Передайте CodeEditorWindow в конструктор ConsoleWindow.', '']
             : ['EDITOR IS NOT CONNECTED.', 'Pass CodeEditorWindow to the ConsoleWindow constructor.', ''])
           return
         }
-        if (this.codeEditor.openFile(path, false)) {
+        const editorPath = rawArgument ? this.fileSystem.resolvePath(this.cwd, rawArgument) : path
+        if (this.codeEditor.openFile(editorPath, false)) {
           this.appendLines(this.language === 'ru'
-            ? [`ОТКРЫТИЕ РЕДАКТОРА: ${path}`, 'NORMAL: i — ввод; Esc — команды Vim; выход — :q или :wq.', '']
-            : [`OPENING EDITOR: ${path}`, 'NORMAL: i — insert; Esc — Vim commands; exit with :q or :wq.', ''])
+            ? [`ОТКРЫТИЕ РЕДАКТОРА: ${editorPath}`, 'NORMAL: i — ввод; Esc — команды Vim; выход — :q или :wq.', '']
+            : [`OPENING EDITOR: ${editorPath}`, 'NORMAL: i — insert; Esc — Vim commands; exit with :q or :wq.', ''])
           this.manager?.show('editor')
+        } else if (!this.fileSystem.exists(editorPath)) {
+          this.appendLines(this.language === 'ru'
+            ? [
+                `ФАЙЛ НЕ СУЩЕСТВУЕТ: ${editorPath}`,
+                `СОЗДАЙТЕ ЕГО КОМАНДОЙ: touch ${editorPath}`,
+                'ЗАТЕМ ОТКРОЙТЕ: vim ' + editorPath,
+                '',
+              ]
+            : [
+                `FILE DOES NOT EXIST: ${editorPath}`,
+                `CREATE IT WITH: touch ${editorPath}`,
+                'THEN OPEN: vim ' + editorPath,
+                '',
+              ])
         } else {
           this.appendLines(this.language === 'ru'
-            ? [`НЕ УДАЛОСЬ ОТКРЫТЬ ФАЙЛ: ${path}`, 'Проверьте имя файла и попробуйте снова.', '']
-            : [`COULD NOT OPEN FILE: ${path}`, 'Check the file name and try again.', ''])
+            ? [`НЕ УДАЛОСЬ ОТКРЫТЬ ФАЙЛ: ${editorPath}`, 'Проверьте имя файла и попробуйте снова.', '']
+            : [`COULD NOT OPEN FILE: ${editorPath}`, 'Check the file name and try again.', ''])
         }
+        return
+      }
+
+      case 'ls':
+        this.printDirectory(rawArgument ? this.fileSystem.resolvePath(this.cwd, rawArgument) : this.cwd)
+        return
+
+      case 'cat':
+        this.printFile(this.resolveArgument(rawArgument))
+        return
+
+      case 'touch':
+        this.createFile(this.resolveArgument(rawArgument))
+        return
+
+      case 'rm':
+        this.removeFile(this.resolveArgument(rawArgument))
+        return
+
+      case 'mv':
+        this.renameFile(rawArgument)
+        return
+
+      case 'cd':
+        this.changeDirectory(rawArgument)
+        return
+
+      case 'pwd':
+        this.appendLines([this.cwd, ''])
+        return
+
+      case 'mkdir':
+        this.createDirectory(this.resolveArgument(rawArgument))
+        return
+
+      case 'rmdir':
+        this.removeDirectory(this.resolveArgument(rawArgument))
+        return
+
+      case 'find':
+        this.findInFiles(rawArgument)
+        return
+
+      case 'df':
+        this.printStorage()
+        return
+
+      case 'tasks':
+        this.appendTranscript(this.language === 'ru'
+          ? 'ОТКРЫТИЕ ДИСПЕТЧЕРА ЗАДАЧ...\n'
+          : 'OPENING TASK MANAGER...\n')
+        this.manager?.show('tasks')
         return
 
       case 'manual':
@@ -1064,6 +1236,251 @@ export class ConsoleWindow implements GameWindow {
       ru
         ? `РЕЖИМ РОБОТА: ${this.robotSystem?.motionStartupComplete ? 'РАБОЧИЙ' : 'ВОССТАНОВЛЕНИЕ'}`
         : `ROBOT MODE: ${this.robotSystem?.motionStartupComplete ? 'OPERATIONAL' : 'RECOVERY'}`,
+      '',
+    ])
+  }
+
+  /** Localized text for a filesystem quota or path error. */
+  private fileSystemError(error: VirtualFileErrorCode): string {
+    const ru = this.language === 'ru'
+    switch (error) {
+      case 'NOT_FOUND':
+        return ru ? 'ПУТЬ НЕ НАЙДЕН' : 'PATH NOT FOUND'
+      case 'ALREADY_EXISTS':
+        return ru ? 'ФАЙЛ ИЛИ КАТАЛОГ УЖЕ СУЩЕСТВУЕТ' : 'FILE OR DIRECTORY ALREADY EXISTS'
+      case 'PARENT_MISSING':
+        return ru ? 'КАТАЛОГ НЕ СУЩЕСТВУЕТ — ФАЙЛ СОЗДАЁТСЯ ТОЛЬКО В СУЩЕСТВУЮЩЕМ КАТАЛОГЕ' : 'PARENT DIRECTORY DOES NOT EXIST — FILES ARE CREATED INSIDE EXISTING DIRECTORIES'
+      case 'INVALID_NAME':
+        return ru ? 'НЕДОПУСТИМОЕ ИМЯ ФАЙЛА' : 'INVALID FILE NAME'
+      case 'FILE_LIMIT':
+        return ru ? `ДОСТИГНУТ ЛИМИТ ФАЙЛОВ: ${VFS_LIMITS.maxFiles}` : `FILE LIMIT REACHED: ${VFS_LIMITS.maxFiles}`
+      case 'FILE_TOO_LARGE':
+        return ru
+          ? `ПРЕВЫШЕН ЛИМИТ РАЗМЕРА ОДНОГО ФАЙЛА: ${formatBytes(VFS_LIMITS.maxFileBytes, 'ru')}`
+          : `SINGLE FILE SIZE LIMIT EXCEEDED: ${formatBytes(VFS_LIMITS.maxFileBytes, 'en')}`
+      case 'NO_SPACE':
+        return ru
+          ? `ХРАНИЛИЩЕ ЗАПОЛНЕНО: ${formatBytes(VFS_LIMITS.maxTotalBytes, 'ru')}`
+          : `STORAGE FULL: ${formatBytes(VFS_LIMITS.maxTotalBytes, 'en')}`
+      case 'PROTECTED':
+        return ru
+          ? 'СИСТЕМНЫЙ ФАЙЛ ЗАЩИЩЁН — УДАЛЯТЬ И ПЕРЕИМЕНОВЫВАТЬ МОЖНО ТОЛЬКО СОЗДАННЫЕ ВАМИ ФАЙЛЫ'
+          : 'SYSTEM FILE IS PROTECTED — ONLY FILES YOU CREATED CAN BE REMOVED OR RENAMED'
+      case 'DIR_LIMIT':
+        return ru
+          ? `ДОСТИГНУТ ЛИМИТ КАТАЛОГОВ: ${VFS_LIMITS.maxDirectories}`
+          : `DIRECTORY LIMIT REACHED: ${VFS_LIMITS.maxDirectories}`
+      case 'DIR_NOT_EMPTY':
+        return ru
+          ? 'КАТАЛОГ НЕ ПУСТ — СНАЧАЛА УДАЛИТЕ ЕГО СОДЕРЖИМОЕ'
+          : 'DIRECTORY IS NOT EMPTY — REMOVE ITS CONTENTS FIRST'
+      default:
+        return ru ? 'ОПЕРАЦИЯ С ФАЙЛОМ ОТКЛОНЕНА' : 'FILE OPERATION REFUSED'
+    }
+  }
+
+  private storageSummaryLine(): string {
+    const usage = this.fileSystem.getStorageUsage()
+    const ru = this.language === 'ru'
+    return ru
+      ? `ХРАНИЛИЩЕ: ${usage.fileCount}/${usage.maxFiles} ФАЙЛ. · ${formatBytes(usage.usedBytes, 'ru')} / ${formatBytes(usage.maxBytes, 'ru')}`
+      : `STORAGE: ${usage.fileCount}/${usage.maxFiles} FILES · ${formatBytes(usage.usedBytes, 'en')} / ${formatBytes(usage.maxBytes, 'en')}`
+  }
+
+  /** Resolve a command argument against the working directory; empty input stays empty for usage hints. */
+  private resolveArgument(rawArgument: string): string {
+    if (!rawArgument.trim()) return ''
+    return this.fileSystem.resolvePath(this.cwd, rawArgument)
+  }
+
+  /** cd — move the shell to another directory, exactly like cmd: absolute or relative, `..` supported. */
+  private changeDirectory(argument: string): void {
+    const ru = this.language === 'ru'
+    const raw = argument.trim()
+    if (!raw) {
+      // cd without arguments behaves like pwd, matching cmd.
+      this.appendLines([this.cwd, ''])
+      return
+    }
+    const target = this.fileSystem.resolvePath(this.cwd, raw)
+    if (!this.fileSystem.isDirectory(target)) {
+      this.appendLines([
+        ru ? `КАТАЛОГ НЕ НАЙДЕН: ${target}` : `DIRECTORY NOT FOUND: ${target}`,
+        ru ? 'СПИСОК СОДЕРЖИМОГО: ls' : 'LIST CONTENTS WITH: ls',
+        '',
+      ])
+      return
+    }
+    this.cwd = target
+  }
+
+  private createDirectory(rawPath: string): void {
+    const ru = this.language === 'ru'
+    if (!rawPath) {
+      this.appendLines([ru ? 'ФОРМАТ: mkdir <путь>' : 'USAGE: mkdir <path>', ''])
+      return
+    }
+    const result = this.fileSystem.makeDirectory(rawPath)
+    if (!result.ok) {
+      this.appendLines([`${ru ? 'ОШИБКА СОЗДАНИЯ КАТАЛОГА' : 'MKDIR ERROR'}: ${this.fileSystemError(result.error ?? 'NOT_FOUND')}`, ''])
+      return
+    }
+    this.appendLines([
+      ru ? `СОЗДАН КАТАЛОГ: ${result.path}` : `DIRECTORY CREATED: ${result.path}`,
+      ru ? `ПЕРЕЙТИ: cd ${result.path}` : `ENTER IT: cd ${result.path}`,
+      '',
+    ])
+  }
+
+  private removeDirectory(rawPath: string): void {
+    const ru = this.language === 'ru'
+    if (!rawPath) {
+      this.appendLines([ru ? 'ФОРМАТ: rmdir <путь>' : 'USAGE: rmdir <path>', ''])
+      return
+    }
+    const result = this.fileSystem.removeDirectory(rawPath)
+    if (!result.ok) {
+      this.appendLines([`${ru ? 'ОШИБКА УДАЛЕНИЯ КАТАЛОГА' : 'RMDIR ERROR'}: ${this.fileSystemError(result.error ?? 'NOT_FOUND')}`, ''])
+      return
+    }
+    this.appendLines([ru ? `УДАЛЁН КАТАЛОГ: ${result.path}` : `DIRECTORY REMOVED: ${result.path}`, ''])
+  }
+
+  private printDirectory(rawPath: string): void {
+    const entries = this.fileSystem.list(rawPath || '/', this.language)
+    const failed = entries[0]?.startsWith(this.language === 'ru' ? 'ОШИБКА' : 'ERROR') ?? false
+    this.appendLines(failed ? entries : [...entries, '', this.storageSummaryLine(), ''])
+  }
+
+  private printFile(rawPath: string): void {
+    const ru = this.language === 'ru'
+    if (!rawPath) {
+      this.appendLines([ru ? 'ФОРМАТ: cat <путь>' : 'USAGE: cat <path>', ''])
+      return
+    }
+    const lines = this.fileSystem.read(rawPath, this.language)
+    if (!lines) {
+      this.appendLines([
+        ru ? `ОШИБКА: ФАЙЛ НЕ НАЙДЕН: ${rawPath}` : `ERROR: FILE NOT FOUND: ${rawPath}`,
+        ru ? 'ПОКАЖИТЕ СОДЕРЖИМОЕ КАТАЛОГА КОМАНДОЙ ls.' : 'LIST THE DIRECTORY CONTENTS WITH ls.',
+        '',
+      ])
+      return
+    }
+    this.appendLines([
+      `--- ${rawPath} ---`,
+      ...lines,
+      '',
+      `${lines.length} ${ru ? 'СТРОК' : 'LINES'}`,
+      '',
+    ])
+  }
+
+  private createFile(rawPath: string): void {
+    const ru = this.language === 'ru'
+    if (!rawPath) {
+      this.appendLines([ru ? 'ФОРМАТ: touch <путь>' : 'USAGE: touch <path>', ''])
+      return
+    }
+    const result = this.fileSystem.create(rawPath)
+    if (!result.ok) {
+      this.appendLines([
+        `${ru ? 'ОШИБКА СОЗДАНИЯ' : 'CREATE ERROR'}: ${this.fileSystemError(result.error ?? 'NOT_FOUND')}`,
+        '',
+      ])
+      return
+    }
+    this.appendLines([
+      ru ? `СОЗДАН ФАЙЛ: ${result.path}` : `CREATED FILE: ${result.path}`,
+      ru ? `ОТКРЫТЬ В РЕДАКТОРЕ: vim ${result.path}` : `OPEN IN THE EDITOR: vim ${result.path}`,
+      this.storageSummaryLine(),
+      '',
+    ])
+  }
+
+  private removeFile(rawPath: string): void {
+    const ru = this.language === 'ru'
+    if (!rawPath) {
+      this.appendLines([ru ? 'ФОРМАТ: rm <путь>' : 'USAGE: rm <path>', ''])
+      return
+    }
+    const result = this.fileSystem.remove(rawPath)
+    if (!result.ok) {
+      this.appendLines([
+        `${ru ? 'ОШИБКА УДАЛЕНИЯ' : 'REMOVE ERROR'}: ${this.fileSystemError(result.error ?? 'NOT_FOUND')}`,
+        '',
+      ])
+      return
+    }
+    this.appendLines([
+      ru ? `УДАЛЁН ФАЙЛ: ${result.path}` : `REMOVED FILE: ${result.path}`,
+      this.storageSummaryLine(),
+      '',
+    ])
+  }
+
+  private renameFile(argument: string): void {
+    const ru = this.language === 'ru'
+    const [fromRaw, toRaw] = argument.split(/\s+/).filter(Boolean)
+    if (!fromRaw || !toRaw) {
+      this.appendLines([ru ? 'ФОРМАТ: mv <исходный путь> <новый путь>' : 'USAGE: mv <source path> <new path>', ''])
+      return
+    }
+    const from = this.fileSystem.resolvePath(this.cwd, fromRaw)
+    const to = this.fileSystem.resolvePath(this.cwd, toRaw)
+    const result = this.fileSystem.rename(from, to)
+    if (!result.ok) {
+      this.appendLines([
+        `${ru ? 'ОШИБКА ПЕРЕИМЕНОВАНИЯ' : 'RENAME ERROR'}: ${this.fileSystemError(result.error ?? 'NOT_FOUND')}`,
+        '',
+      ])
+      return
+    }
+    this.appendLines([ru ? `ПЕРЕИМЕНОВАН: ${from} -> ${result.path}` : `RENAMED: ${from} -> ${result.path}`, ''])
+  }
+
+  private findInFiles(term: string): void {
+    const ru = this.language === 'ru'
+    if (!term.trim()) {
+      this.appendLines([ru ? 'ФОРМАТ: find <слово>' : 'USAGE: find <term>', ''])
+      return
+    }
+    const matches = this.fileSystem.find(term, this.language)
+    if (matches.length === 0) {
+      this.appendLines([ru ? `СОВПАДЕНИЙ НЕ НАЙДЕНО: ${term}` : `NO MATCHES: ${term}`, ''])
+      return
+    }
+    const shown = matches.slice(0, 20)
+    this.appendLines([
+      ru ? `НАЙДЕНО ${matches.length} (ПОКАЗАНЫ ПЕРВЫЕ ${shown.length})` : `FOUND ${matches.length} (SHOWING FIRST ${shown.length})`,
+      ...shown.map((match) => `${match.path}\n    ${match.preview}`),
+      '',
+    ])
+  }
+
+  /** Quota report: file count, total size, and how full each limit is. */
+  private printStorage(): void {
+    const ru = this.language === 'ru'
+    const usage = this.fileSystem.getStorageUsage()
+    const width = 24
+    const directoriesText = `${usage.directoryCount} / ${usage.maxDirectories}`
+    const bar = (ratio: number): string => {
+      const filled = Math.max(ratio > 0 ? 1 : 0, Math.min(width, Math.round(ratio * width)))
+      return `[${'#'.repeat(filled)}${'.'.repeat(width - filled)}]`
+    }
+    this.appendLines([
+      ru ? 'ФАЙЛОВОЕ ХРАНИЛИЩЕ / КВОТЫ СЕАНСА' : 'FILE STORAGE / SESSION QUOTAS',
+      '------------------------------------------------------------------',
+      `${ru ? 'ФАЙЛОВ' : 'FILES'}     ${String(usage.fileCount).padStart(3)} / ${String(usage.maxFiles).padEnd(3)} ${bar(usage.fileRatio)}`,
+      `${ru ? 'ОБЪЁМ' : 'SIZE'}     ${formatBytes(usage.usedBytes, ru ? 'ru' : 'en').padStart(8)} / ${formatBytes(usage.maxBytes, ru ? 'ru' : 'en').padEnd(8)} ${bar(usage.byteRatio)}`,
+      `${ru ? 'СВОБОДНО' : 'FREE'}    ${usage.maxFiles - usage.fileCount} ${ru ? 'ФАЙЛ.' : 'FILES'} · ${formatBytes(Math.max(0, usage.maxBytes - usage.usedBytes), ru ? 'ru' : 'en')}`,
+      `${ru ? 'ЛИМИТ ФАЙЛА' : 'PER FILE'} ${formatBytes(VFS_LIMITS.maxFileBytes, ru ? 'ru' : 'en')}`,
+      `${ru ? 'КАТАЛОГОВ' : 'DIRS'}    ${directoriesText}`,
+      `${ru ? 'САМЫЙ БОЛЬШОЙ ФАЙЛ' : 'LARGEST FILE'}: ${formatBytes(usage.largestFileBytes, ru ? 'ru' : 'en')}`,
+      '',
+      ru
+        ? 'Запись отклоняется, когда лимит исчерпан: сеанс не переполняется.'
+        : 'Writes are refused when a limit is reached, so the session cannot grow unbounded.',
       '',
     ])
   }
@@ -1716,12 +2133,29 @@ export class ConsoleWindow implements GameWindow {
         '01. components — список компонентов и их текущих состояний.',
         '02. status — сводка неисправностей и режим робота.',
         '03. ui — открыть панель обслуживания и мини-игры.',
-        '04. vim — открыть редактор профиля движения.',
-        '05. manual — повторно показать эту инструкцию.',
-        '06. clear — полностью очистить экран консоли.',
-        '07. start — попробовать запустить робота; при отказе будет показан список блокирующих проблем.',
-        '08. ↑/↓ — история введённых команд; TAB — автодополнение видимых команд.',
-        '09. Не обходите защиту: запуск блокируется при невосстановленных критических подсистемах.',
+        '04. tasks — диспетчер задач: производительность, параметры и процессы робота.',
+        '05. vim — открыть редактор профиля движения.',
+        '06. manual — повторно показать эту инструкцию.',
+        '07. clear — полностью очистить экран консоли.',
+        '08. start — попробовать запустить робота; при отказе будет показан список блокирующих проблем.',
+        '09. ↑/↓ — история введённых команд; TAB — автодополнение видимых команд.',
+        '',
+        'ФАЙЛОВЫЕ КОМАНДЫ:',
+        '10. ls [путь] — содержимое каталога.',
+        '11. cat <путь> — прочитать файл.',
+        '12. touch <путь> — создать файл (лимиты: файлы и общий объём).',
+        '13. rm <путь> / mv <а> <б> — удалить или переименовать созданный вами файл.',
+        '14. find <слово> — поиск по путям и содержимому.',
+        '15. df — заполнение файлового хранилища и лимиты.',
+        '16. vim [путь] — правка файлов; создать новый можно командой touch.',
+        '',
+        'КАТАЛОГИ:',
+        '17. cd <путь> — перейти в каталог (как в cmd): cd .. — вверх, cd — текущий путь.',
+        '18. pwd — показать текущий каталог.',
+        '19. mkdir <путь> / rmdir <путь> — создать каталог или удалить пустой созданный вами.',
+        'Пути файловых команд считаются от текущего каталога; абсолютные начинаются с /.',
+        '',
+        'Не обходите защиту: запуск блокируется при невосстановленных критических подсистемах.',
         '------------------------------------------',
       ].join('\n')
     }
@@ -1731,12 +2165,29 @@ export class ConsoleWindow implements GameWindow {
       '01. components — list components and their current state.',
       '02. status — summary of faults and robot mode.',
       '03. ui — open maintenance UI and minigames.',
-      '04. vim — open the motion-profile editor.',
-      '05. manual — print this manual again.',
-      '06. clear — fully clear the console screen.',
-      '07. start — attempt to start the robot; blocking faults are listed if startup is refused.',
-      '08. ↑/↓ — command history; TAB — autocomplete visible commands.',
-      '09. Do not bypass safety systems: startup is blocked while critical systems remain unrecovered.',
+      '04. tasks — task manager: robot performance, parameters and processes.',
+      '05. vim — open the motion-profile editor.',
+      '06. manual — print this manual again.',
+      '07. clear — fully clear the console screen.',
+      '08. start — attempt to start the robot; blocking faults are listed if startup is refused.',
+      '09. ↑/↓ — command history; TAB — autocomplete visible commands.',
+      '',
+      'FILE COMMANDS:',
+      '10. ls [path] — list a directory.',
+      '11. cat <path> — read a file.',
+      '12. touch <path> — create a file (file-count and size quotas apply).',
+      '13. rm <path> / mv <a> <b> — remove or rename a file you created.',
+      '14. find <term> — search paths and contents.',
+      '15. df — storage fill levels and quotas.',
+      '16. vim [path] — edit files; create a new one with touch.',
+      '',
+      'DIRECTORIES:',
+      '17. cd <path> — change directory (like cmd): cd .. — go up, cd — print the current path.',
+      '18. pwd — print the current directory.',
+      '19. mkdir <path> / rmdir <path> — create a directory or remove an empty one you created.',
+      'File-command paths resolve from the current directory; absolute paths start with /.',
+      '',
+      'Do not bypass safety systems: startup is blocked while critical systems remain unrecovered.',
       '-----------------------------------',
     ].join('\n')
   }
@@ -1750,9 +2201,16 @@ export class ConsoleWindow implements GameWindow {
 
 
   private getTerminalPrompt(): string {
+    const path = this.getPromptPath()
+    return this.language === 'ru' ? `ОПЕРАТОР@РОБОТ:${path}$ ` : `OPERATOR@ROBOT:${path}$ `
+  }
 
-    return this.language === 'ru' ? 'ОПЕРАТОР@РОБОТ:\~$ ' : 'OPERATOR\@ROBOT:\~$ '
-
+  /** Current directory in the prompt; long paths keep their tail so the user still sees where they are. */
+  private getPromptPath(): string {
+    if (this.cwd === '/') return '/'
+    const max = 18
+    if (this.cwd.length <= max) return this.cwd
+    return `...${this.cwd.slice(-max + 3)}`
   }
 
 
