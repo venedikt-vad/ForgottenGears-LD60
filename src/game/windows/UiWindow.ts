@@ -15,11 +15,11 @@ type ComponentRow = { id: string; rect: Rect }
 type BodyHotspot = { part: Exclude<BodyPart, 'ALL'>; rect: Rect }
 
 const COLORS = {
-  // Translucent on purpose: the blurred glow layer sits below the game canvas
-  // and must stay visible through the UI surfaces.
-  background: 'rgba(5, 11, 7, 0.42)',
-  panel: 'rgba(7, 23, 13, 0.72)',
-  panelAlt: 'rgba(12, 34, 19, 0.78)',
+  // The blurred glow layer sits below the game canvas and is only visible
+  // through transparent pixels, so the windows never paint an opaque backdrop:
+  // a full-screen tint would swallow the bloom completely (see #glow CSS).
+  panel: 'rgba(7, 23, 13, 0.5)',
+  panelAlt: 'rgba(12, 34, 19, 0.55)',
   border: '#376d42',
   borderBright: '#89f5a4',
   grid: 'rgba(83, 158, 98, 0.13)',
@@ -256,8 +256,6 @@ export class UiWindow implements GameWindow {
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
     ctx.clearRect(0, 0, width, height)
-    ctx.fillStyle = COLORS.background
-    ctx.fillRect(0, 0, width, height)
     this.drawGrid(ctx, width, height)
 
     const margin = width < 560 ? 10 : width < 1000 ? 18 : 28

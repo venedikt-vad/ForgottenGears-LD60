@@ -306,6 +306,9 @@ export class ConsoleWindow implements GameWindow {
 
   private command = ''
 
+  /** Cursor position inside `command`; arrows move it so edits can target mid-line. */
+  private commandCursor = 0
+
   /** Shell working directory for relative paths; cd changes it, the prompt shows it. */
   private cwd = '/'
 
@@ -366,6 +369,7 @@ export class ConsoleWindow implements GameWindow {
     this.manualQueued = false
 
     this.command = ''
+    this.commandCursor = 0
 
     this.cwd = '/'
 
@@ -579,8 +583,6 @@ export class ConsoleWindow implements GameWindow {
 
     this.drawRule(ctx, margin, promptY - 5, width - margin * 2)
 
-    const cursor = Math.floor(this.blinkClock * 2) % 2 === 0 ? '\_' : ' '
-
     ctx.font = normalFont
 
     ctx.fillStyle = '#c8f3b5'
@@ -589,7 +591,24 @@ export class ConsoleWindow implements GameWindow {
 
     ctx.shadowBlur = 1
 
-    ctx.fillText(`${this.getBottomPrompt()}${this.getBottomInput()}${cursor}`, margin, promptY)
+    const inputText = this.getBottomInput()
+
+    // In the terminal the cursor can sit mid-line; the Y/N and streaming
+    // prompts have no movable cursor and keep it at the end.
+    const cursorIndex = this.stage === 'terminal'
+      ? Math.min(this.commandCursor, inputText.length)
+      : inputText.length
+
+    ctx.fillText(`${this.getBottomPrompt()}${inputText}`, margin, promptY)
+
+    // The underscore blinks over the character under the cursor (or just past
+    // the last one), so the typed text never shifts while editing.
+    if (Math.floor(this.blinkClock * 2) % 2 === 0) {
+      const prefixWidth = ctx.measureText(
+        `${this.getBottomPrompt()}${inputText.slice(0, cursorIndex)}`,
+      ).width
+      ctx.fillText('_', margin + prefixWidth, promptY)
+    }
 
     ctx.shadowBlur = 0
 
@@ -607,8 +626,8 @@ export class ConsoleWindow implements GameWindow {
           ? 'POWER: ON  |  MODE: OPERATIONAL'
           : 'POWER: ON  |  MODE: RECOVERY')
     const footerHints = this.language === 'ru'
-      ? '↑/↓: ИСТОРИЯ   TAB: АВТОДОПОЛНЕНИЕ'
-      : '↑/↓: HISTORY   TAB: AUTOCOMPLETE'
+      ? '←/→: КУРСОР  ↑/↓: ИСТОРИЯ  TAB: АВТОДОП.'
+      : '←/→: CURSOR  ↑/↓: HISTORY  TAB: AUTOCOMP.'
 
     ctx.textAlign = 'left'
     ctx.fillText(footerStatus, margin, footerY, width * 0.59)
@@ -700,6 +719,7 @@ export class ConsoleWindow implements GameWindow {
         this.commandDraft = ''
         this.browsingCommandHistory = false
         this.command = ''
+        this.commandCursor = 0
         this.clearCompletionState()
         this.followTail = true
         if (typed) this.executeCommand(typed)
@@ -715,6 +735,7 @@ export class ConsoleWindow implements GameWindow {
         }
         this.commandHistoryIndex = Math.max(0, this.commandHistoryIndex - 1)
         this.command = this.commandHistory[this.commandHistoryIndex] ?? ''
+        this.commandCursor = this.command.length
         this.clearCompletionState()
         continue
       }
@@ -730,7 +751,30 @@ export class ConsoleWindow implements GameWindow {
           this.commandDraft = ''
           this.browsingCommandHistory = false
         }
+        this.commandCursor = this.command.length
         this.clearCompletionState()
+        continue
+      }
+
+      // Mid-line editing: the cursor slides over the typed text instead of
+      // always sitting at the end, so mistakes can be fixed in place.
+      if (key === 'ArrowLeft') {
+        this.commandCursor = Math.max(0, this.commandCursor - 1)
+        continue
+      }
+
+      if (key === 'ArrowRight') {
+        this.commandCursor = Math.min(this.command.length, this.commandCursor + 1)
+        continue
+      }
+
+      if (key === 'Home') {
+        this.commandCursor = 0
+        continue
+      }
+
+      if (key === 'End') {
+        this.commandCursor = this.command.length
         continue
       }
 
@@ -740,7 +784,25 @@ export class ConsoleWindow implements GameWindow {
       }
 
       if (key === 'Backspace') {
-        this.command = this.command.slice(0, -1)
+        if (this.commandCursor > 0) {
+          this.command =
+            this.command.slice(0, this.commandCursor - 1) + this.command.slice(this.commandCursor)
+          this.commandCursor -= 1
+        }
+        this.browsingCommandHistory = false
+        this.commandHistoryIndex = this.commandHistory.length
+        this.commandDraft = ''
+        this.clearCompletionState()
+        continue
+      }
+
+      // Delete removes the character under the cursor; without it Backspace
+      // alone could not fix a character typed past the cursor.
+      if (key === 'Delete') {
+        if (this.commandCursor < this.command.length) {
+          this.command =
+            this.command.slice(0, this.commandCursor) + this.command.slice(this.commandCursor + 1)
+        }
         this.browsingCommandHistory = false
         this.commandHistoryIndex = this.commandHistory.length
         this.commandDraft = ''
@@ -751,7 +813,9 @@ export class ConsoleWindow implements GameWindow {
       if (key === 'Escape') continue
 
       if (key.length === 1 && this.command.length < 128) {
-        this.command += key
+        this.command =
+          this.command.slice(0, this.commandCursor) + key + this.command.slice(this.commandCursor)
+        this.commandCursor += 1
         this.browsingCommandHistory = false
         this.commandHistoryIndex = this.commandHistory.length
         this.commandDraft = ''
@@ -770,6 +834,7 @@ export class ConsoleWindow implements GameWindow {
     ) {
       this.completionIndex = (this.completionIndex + 1) % this.completionCandidates.length
       this.command = this.completionCandidates[this.completionIndex]
+      this.commandCursor = this.command.length
       this.lastCompletedValue = this.command
       return
     }
@@ -779,6 +844,7 @@ export class ConsoleWindow implements GameWindow {
     if (candidates.length === 0) return
 
     this.command = candidates[0]
+    this.commandCursor = this.command.length
 
     // A single command candidate (for example, "inf" -> "info") should not
     // trap the user in a one-item cycle: the next Tab can complete its argument.
@@ -896,7 +962,8 @@ export class ConsoleWindow implements GameWindow {
               '  rasm check <п> — собрать .rasm и вывести диагностику',
               '',
               'ПУТИ: команды файлов работают с текущего каталога; абсолютные начинаются с /.',
-              'УПРАВЛЕНИЕ: ↑/↓ — история команд; TAB — автодополнение.',
+              'УПРАВЛЕНИЕ: ↑/↓ — история команд; ←/→, Home/End — курсор в строке;',
+              'Backspace/Delete — правка; TAB — автодополнение.',
               '',
             ]
           : [
@@ -927,7 +994,8 @@ export class ConsoleWindow implements GameWindow {
               '  rasm check <p> — assemble a .rasm file and print diagnostics',
               '',
               'PATHS: file commands resolve from the current directory; absolute paths start with /.',
-              'CONTROLS: ↑/↓ — command history; TAB — autocomplete.',
+              'CONTROLS: ↑/↓ — command history; ←/→, Home/End — cursor in the line;',
+              'Backspace/Delete — editing; TAB — autocomplete.',
               '',
             ])
         return
@@ -1549,6 +1617,7 @@ export class ConsoleWindow implements GameWindow {
     this.stage = 'terminal'
 
     this.command = ''
+    this.commandCursor = 0
 
     this.appendTranscript(this.language === 'ru'
 
@@ -2197,7 +2266,8 @@ export class ConsoleWindow implements GameWindow {
         '06. manual — повторно показать эту инструкцию.',
         '07. clear — полностью очистить экран консоли.',
         '08. start — попробовать запустить робота; при отказе будет показан список блокирующих проблем.',
-        '09. ↑/↓ — история введённых команд; TAB — автодополнение видимых команд.',
+        '09. ↑/↓ — история введённых команд; ←/→, Home/End — курсор в строке ввода;',
+        '    Backspace/Delete — правка символа; TAB — автодополнение видимых команд.',
         '',
         'ФАЙЛОВЫЕ КОМАНДЫ:',
         '10. ls [путь] — содержимое каталога.',
@@ -2229,7 +2299,8 @@ export class ConsoleWindow implements GameWindow {
       '06. manual — print this manual again.',
       '07. clear — fully clear the console screen.',
       '08. start — attempt to start the robot; blocking faults are listed if startup is refused.',
-      '09. ↑/↓ — command history; TAB — autocomplete visible commands.',
+      '09. ↑/↓ — command history; ←/→, Home/End — cursor inside the input line;',
+      '    Backspace/Delete — edit a character; TAB — autocomplete visible commands.',
       '',
       'FILE COMMANDS:',
       '10. ls [path] — list a directory.',

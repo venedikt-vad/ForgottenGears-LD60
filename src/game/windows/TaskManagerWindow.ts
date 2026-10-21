@@ -7,9 +7,11 @@ import type { WindowManager } from './WindowManager'
 type Rect = { x: number; y: number; width: number; height: number }
 
 const COLORS = {
-  background: 'rgba(5, 11, 7, 0.42)',
-  panel: 'rgba(7, 23, 13, 0.72)',
-  panelAlt: 'rgba(12, 34, 19, 0.78)',
+  // Kept transparent on purpose: the blurred glow layer lives *under* the game
+  // canvas and only shows through unpainted pixels, so a full-screen tint here
+  // would kill the bloom (same reason PowerDistribution leaves panel at 0.0).
+  panel: 'rgba(7, 23, 13, 0.5)',
+  panelAlt: 'rgba(12, 34, 19, 0.55)',
   border: '#376d42',
   borderBright: '#89f5a4',
   text: '#bcffae',
@@ -152,8 +154,9 @@ export class TaskManagerWindow implements GameWindow {
 
   render(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
-    ctx.fillStyle = COLORS.background
-    ctx.fillRect(0, 0, width, height)
+    // Clear instead of painting a backdrop: it wipes the debug grid/Game layer
+    // beneath and leaves the background transparent for the glow layer to show.
+    ctx.clearRect(0, 0, width, height)
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
 
