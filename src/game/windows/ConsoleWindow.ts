@@ -8,8 +8,10 @@ import type { WindowManager } from './WindowManager'
 import { VirtualFileSystem, VFS_LIMITS, formatBytes, type VirtualFileErrorCode } from '../VirtualFileSystem'
 import type { CodeEditorWindow } from './CodeEditorWindow'
 import type { RobotSystem, RuntimeStatus } from '../Game'
+import type { RobotData } from '../RobotData'
 import { compileProgram, isRunnable, formatDiagnostics } from '../rasm'
 import type { RasmWindow } from './RasmWindow'
+import { STARTUP_PROGRAM_PATH, startupCheck } from '../runtime/constants'
 
 
 /** Commands whose argument is a filesystem path, used for Tab completion. */
@@ -279,6 +281,8 @@ export class ConsoleWindow implements GameWindow {
   private readonly fileSystem: VirtualFileSystem
   private readonly codeEditor: Pick<CodeEditorWindow, 'openFile'> | null
   private readonly robotSystem: RobotSystem | null
+  /** Read-model in front of the runtime; the shell's only door to the kernel. */
+  private readonly robotData: RobotData | null
 
   private language: GameLanguage = 'ru'
 
@@ -341,16 +345,25 @@ export class ConsoleWindow implements GameWindow {
 
   private lastVisibleLineCount = 1
 
+  /**
+   * The startup program the shell is waiting for. The program runs as a real
+   * process, so its verdict arrives a few frames later — the game loop calls
+   * `pollRuntime()` every frame, even while another window is open.
+   */
+  private startupWatch: { pid: number } | null = null
+
 
 
   constructor(
     fileSystem: VirtualFileSystem = new VirtualFileSystem(),
     codeEditor: Pick<CodeEditorWindow, 'openFile'> | null = null,
     robotSystem: RobotSystem | null = null,
+    robotData: RobotData | null = null,
   ) {
     this.fileSystem = fileSystem
     this.codeEditor = codeEditor
     this.robotSystem = robotSystem
+    this.robotData = robotData
     this.setLanguage('ru')
   }
 
@@ -917,6 +930,7 @@ export class ConsoleWindow implements GameWindow {
     return [
       'help', 'components', 'ui', 'status', 'vim', 'manual', 'clear', 'start',
       'ls', 'cd', 'pwd', 'cat', 'touch', 'rm', 'mv', 'mkdir', 'rmdir', 'find', 'df', 'tasks',
+      'ps', 'run', 'kill', 'pause', 'resume',
     ]
   }
 
@@ -944,7 +958,14 @@ export class ConsoleWindow implements GameWindow {
               '  manual     — инструкция оператора',
               '  rasm       — открыть отладчик RASM',
               '  clear      — полностью очистить экран консоли',
-              '  start      — запуск робота; при отказе выводятся блокирующие проблемы.',
+              '  start      — запустить программу проверки аппаратуры; при отказе выводится код отказа.',
+              '',
+              'ПРОЦЕССЫ:',
+              '  ps               — таблица процессов робота',
+              '  run <путь>       — запустить .rasm-программу в фоне',
+              '  kill <PID>       — завершить процесс',
+              '  pause <PID>      — приостановить процесс',
+              '  resume <PID>     — продолжить процесс',
               '',
               'ФАЙЛЫ:',
               '  ls [путь]      — содержимое каталога',
@@ -976,7 +997,14 @@ export class ConsoleWindow implements GameWindow {
               '  manual     — operator manual',
               '  rasm       — open the RASM debugger',
               '  clear      — clear the console screen completely',
-              '  start      — start the robot; blocking faults are listed if startup is refused.',
+              '  start      — run the hardware self-test program; a failed check reports its code.',
+              '',
+              'PROCESSES:',
+              '  ps               — process table of the robot',
+              '  run <path>       — start a .rasm program in the background',
+              '  kill <PID>       — terminate a process',
+              '  pause <PID>      — suspend a process',
+              '  resume <PID>     — continue a process',
               '',
               'FILES:',
               '  ls [path]    — list a directory',
@@ -1106,6 +1134,26 @@ export class ConsoleWindow implements GameWindow {
         this.manager?.show('tasks')
         return
 
+      case 'ps':
+        this.printProcessTable()
+        return
+
+      case 'run':
+        this.runProgramFile(rawArgument)
+        return
+
+      case 'kill':
+        this.controlProgram('kill', rawArgument)
+        return
+
+      case 'pause':
+        this.controlProgram('pause', rawArgument)
+        return
+
+      case 'resume':
+        this.controlProgram('resume', rawArgument)
+        return
+
       case 'manual':
         this.appendTranscript(`${this.manualText}\n\n`)
         return
@@ -1171,19 +1219,28 @@ export class ConsoleWindow implements GameWindow {
     return labels.map((label, index) => ({ label, done: done[index] ?? false }))
   }
 
+  /**
+   * The `start` command.
+   *
+   * The robot does not trust the console: the command launches the shipped
+   * startup program as a real process, and the program itself reads the
+   * hardware ports. The checklist below is only the operator-facing summary of
+   * what is still missing; the machine has the final word.
+   */
   private tryStartRobot(): void {
     const ru = this.language === 'ru'
     const system = this.robotSystem
-    if (!system) {
+    const data = this.robotData
+    if (!system || !data) {
       this.appendLines(ru
         ? [
             'ОТКАЗ ЗАПУСКА: СИСТЕМНОЕ СОСТОЯНИЕ НЕ ПОДКЛЮЧЕНО К КОНСОЛИ.',
-            'Передайте shared RobotSystem в конструктор ConsoleWindow.',
+            'Передайте shared RobotSystem и RobotData в конструктор ConsoleWindow.',
             '',
           ]
         : [
             'START REFUSED: ROBOT SYSTEM STATE IS NOT CONNECTED TO THE CONSOLE.',
-            'Pass the shared RobotSystem to the ConsoleWindow constructor.',
+            'Pass the shared RobotSystem and RobotData to the ConsoleWindow constructor.',
             '',
           ])
       return
@@ -1192,7 +1249,7 @@ export class ConsoleWindow implements GameWindow {
     // The gate is the same recovery checklist the UI window renders, so both
     // screens can never disagree about what is left to do.
     const checklist = this.recoveryChecklist()
-    const taskComponentIds = ['PWR-100', 'PDU-230', 'ACT-610', 'CPU-730', 'MCM-740']
+    const taskComponentIds = ['PWR-100', 'BUS-T-240', 'ACT-610', 'MEM-732', 'MCM-740']
 
     const blockers: string[] = []
     checklist.forEach((task, index) => {
@@ -1212,28 +1269,135 @@ export class ConsoleWindow implements GameWindow {
         ru ? 'ТЕКУЩИЕ ПРИЧИНЫ:' : 'CURRENT BLOCKERS:',
         ...blockers,
         '',
-        ru ? 'Исправьте перечисленные проблемы и повторите команду start.' : 'Resolve the listed issues and run start again.',
+        ru ? 'ПРОВЕРКА МАШИНЫ НЕ ЗАПУЩЕНА. Исправьте перечисленные проблемы и повторите start.' : 'THE MACHINE CHECK WAS NOT RUN. Resolve the listed issues and run start again.',
         '',
       ])
       return
     }
 
-    if (system.completeBodyStartup()) {
-      // Every checklist task is green: clear the console and show the win screen.
-      this.transcript = ''
-      this.pendingOutput = ''
-      this.outputCharAccumulator = 0
-      this.scrollTopLine = 0
-      this.lastMaxScrollTop = 0
-      this.followTail = true
-      this.manager?.show('victory')
+    // The startup program is shipped firmware; it must exist on the robot.
+    const source = this.fileSystem.read(STARTUP_PROGRAM_PATH, this.language)?.join('\n')
+    if (!source) {
+      this.appendLines([
+        ru ? `ОШИБКА: ПРОГРАММА ЗАПУСКА НЕ НАЙДЕНА: ${STARTUP_PROGRAM_PATH}` : `ERROR: STARTUP PROGRAM NOT FOUND: ${STARTUP_PROGRAM_PATH}`,
+        '',
+      ])
       return
     }
 
-    const startupEvent = [...system.getEvents()].reverse().find((event) => event.source === 'BODY STARTUP')
+    // A previous attempt is retired first, so the process table never fills
+    // with stale copies of the same firmware.
+    for (const program of data.listProgramsByPath(STARTUP_PROGRAM_PATH)) {
+      if (program.state === 'RUNNING' || program.state === 'DEGRADED' || program.state === 'WAITING' || program.state === 'SUSPENDED') {
+        data.killProcess(program.pid)
+      }
+    }
+
+    // Latches belong to the run: clear them so the verdict is this run's.
+    data.resetLatches()
+
+    const result = data.launchProgram(source, { path: STARTUP_PROGRAM_PATH })
+    if (!result) {
+      this.appendLines([
+        ru ? 'ОТКАЗ ЗАПУСКА: СРЕДА ВЫПОЛНЕНИЯ НЕ ПОДКЛЮЧЕНА.' : 'START REFUSED: THE EXECUTION ENVIRONMENT IS NOT CONNECTED.',
+        '',
+      ])
+      return
+    }
+
+    const pid = result.pid
+    if (pid === null) {
+      this.appendLines([
+        ru ? 'ОТКАЗ ЗАПУСКА ПРОГРАММЫ.' : 'STARTUP PROGRAM REFUSED.',
+        result.message[this.language],
+        '',
+      ])
+      return
+    }
+
+    this.startupWatch = { pid }
     this.appendLines([
-      ru ? 'ЗАПУСК НЕ СОСТОЯЛСЯ.' : 'STARTUP FAILED.',
-      startupEvent?.message ?? (ru ? 'Система отклонила запуск. Проверьте состояние компонентов командой status.' : 'The system rejected startup. Check component state with status.'),
+      ru ? `ЗАПУСК ПРОГРАММЫ: ${STARTUP_PROGRAM_PATH}` : `PROGRAM STARTED: ${STARTUP_PROGRAM_PATH}`,
+      ru ? `PID: ${pid} — ПРОВЕРКА АППАРАТУРЫ ВЫПОЛНЯЕТСЯ...` : `PID: ${pid} — RUNNING THE HARDWARE CHECKS...`,
+      '',
+    ])
+  }
+
+  /**
+   * Called once per frame by the game loop.
+   *
+   * The startup program is a real process, so its verdict arrives later than
+   * the command that launched it. This method notices the end of that program
+   * and reports it, no matter which window is currently open.
+   */
+  pollRuntime(): void {
+    const watch = this.startupWatch
+    if (!watch) return
+    const data = this.robotData
+    if (!data) {
+      this.startupWatch = null
+      return
+    }
+    const program = data.getProgram(watch.pid)
+    if (!program) {
+      this.startupWatch = null
+      return
+    }
+    if (program.state === 'RUNNING' || program.state === 'DEGRADED' || program.state === 'WAITING' || program.state === 'SUSPENDED') return
+
+    this.startupWatch = null
+    this.reportStartupResult(program.pid, program.state, program.error)
+  }
+
+  /** Turn the finished startup program into a verdict for the operator. */
+  private reportStartupResult(pid: number, state: string, error: string | null): void {
+    const ru = this.language === 'ru'
+    const data = this.robotData
+    const system = this.robotSystem
+
+    if (state === 'FAULT') {
+      this.appendLines([
+        ru ? `ОТКАЗ: ПРОГРАММА ЗАПУСКА ${pid} ЗАВЕРШИЛАСЬ ОШИБКОЙ.` : `FAILED: STARTUP PROGRAM ${pid} ENDED WITH AN ERROR.`,
+        error ?? (ru ? 'Причина неизвестна.' : 'The reason is unknown.'),
+        ru ? 'ПРОВЕРЬТЕ СОСТОЯНИЕ КОМПОНЕНТОВ КОМАНДОЙ status.' : 'CHECK THE COMPONENT STATE WITH status.',
+        '',
+      ])
+      return
+    }
+
+    const diag = data?.readLatch('DIAG') ?? 0
+    const boot = data?.readLatch('BOOT') ?? 0
+
+    if (diag === 0 && boot === 1) {
+      if (system?.completeBodyStartup()) {
+        // Every check passed: clear the console and show the win screen.
+        this.transcript = ''
+        this.pendingOutput = ''
+        this.outputCharAccumulator = 0
+        this.scrollTopLine = 0
+        this.lastMaxScrollTop = 0
+        this.followTail = true
+        this.manager?.show('victory')
+        return
+      }
+      const startupEvent = [...(system?.getEvents() ?? [])].reverse().find((event) => event.source === 'BODY STARTUP')
+      this.appendLines([
+        ru ? 'ЗАПУСК НЕ СОСТОЯЛСЯ.' : 'STARTUP FAILED.',
+        startupEvent?.message ?? (ru ? 'Система отклонила запуск.' : 'The system rejected startup.'),
+        '',
+      ])
+      return
+    }
+
+    const check = startupCheck(diag)
+    const component = check ? system?.getComponent(check.componentId) : undefined
+    this.appendLines([
+      ru ? `ОТКАЗ: ПРОВЕРКА ${diag} НЕ ПРОЙДЕНА.` : `FAILED: CHECK ${diag} DID NOT PASS.`,
+      ru ? `УЗЕЛ: ${check?.label.ru ?? 'неизвестно'}` : `UNIT: ${check?.label.en ?? 'unknown'}`,
+      ...(check ? [`[${check.componentId}]${component ? ` — ${component.status}` : ''}`] : []),
+      ...(component?.fault ? [`${ru ? 'ТЕКУЩАЯ ОШИБКА' : 'CURRENT FAULT'}: ${component.fault}`] : []),
+      ...(component?.recommendation ? [`${ru ? 'ДЕЙСТВИЕ' : 'ACTION'}: ${component.recommendation}`] : []),
+      ru ? 'ПОВТОРИТЕ start ПОСЛЕ УСТРАНЕНИЯ ПРИЧИНЫ.' : 'RUN start AGAIN AFTER FIXING THE CAUSE.',
       '',
     ])
   }
@@ -1472,6 +1636,144 @@ export class ConsoleWindow implements GameWindow {
     }
 
     this.manager?.show('rasm')
+  }
+
+  /**
+   * `ps` — the process table of the robot.
+   *
+   * System services come from the component registry, user programs from the
+   * kernel, so the shell shows exactly what the task manager shows.
+   */
+  private printProcessTable(): void {
+    const ru = this.language === 'ru'
+    const data = this.robotData
+    if (!data) {
+      this.appendLines([ru ? 'ТАБЛИЦА ПРОЦЕССОВ НЕДОСТУПНА.' : 'THE PROCESS TABLE IS NOT AVAILABLE.', ''])
+      return
+    }
+
+    const programs = data.listPrograms()
+    const lines = [
+      ru ? 'ПРОЦЕССЫ РОБОТА' : 'ROBOT PROCESSES',
+      '------------------------------------------------------------',
+      `${'PID'.padStart(5)} ${'STATE'.padEnd(9)} ${'CPU%'.padStart(6)} ${'NAME'}`,
+      '------------------------------------------------------------',
+    ]
+
+    for (const process of data.getProcesses()) {
+      const kind = process.kind === 'program' ? '*' : ' '
+      const state = process.state.padEnd(9)
+      const cpu = process.cpuPercent.toFixed(1).padStart(6)
+      lines.push(`${String(process.pid).padStart(4)}${kind} ${state} ${cpu} ${process.name}`)
+    }
+
+    lines.push(
+      '------------------------------------------------------------',
+      ru
+        ? `${programs.length} ПРОГРАММ, ${data.getProcesses().filter((process) => process.kind === 'program' && (process.state === 'RUNNING' || process.state === 'DEGRADED')).length} АКТИВНЫХ. * — ПРОГРАММА ОПЕРАТОРА.`
+        : `${programs.length} PROGRAMS, ${data.getProcesses().filter((process) => process.kind === 'program' && (process.state === 'RUNNING' || process.state === 'DEGRADED')).length} ACTIVE. * — OPERATOR PROGRAM.`,
+      '',
+    )
+    this.appendLines(lines)
+  }
+
+  /** `run <path>` — launch a program from the robot's file system. */
+  private runProgramFile(rawArgument: string): void {
+    const ru = this.language === 'ru'
+    const data = this.robotData
+    if (!data) {
+      this.appendLines([ru ? 'СРЕДА ВЫПОЛНЕНИЯ НЕ ПОДКЛЮЧЕНА.' : 'THE EXECUTION ENVIRONMENT IS NOT CONNECTED.', ''])
+      return
+    }
+    if (!rawArgument) {
+      this.appendLines([ru ? 'ФОРМАТ: run <путь>' : 'USAGE: run <path>', ''])
+      return
+    }
+
+    const resolved = this.fileSystem.resolvePath(this.cwd, rawArgument)
+    const lines = this.fileSystem.read(resolved, this.language)
+    if (!lines) {
+      this.appendLines([
+        ru ? `ОШИБКА: ФАЙЛ НЕ НАЙДЕН: ${resolved}` : `ERROR: FILE NOT FOUND: ${resolved}`,
+        '',
+      ])
+      return
+    }
+
+    const source = lines.join('\n')
+    const result = data.launchProgram(source, { path: resolved })
+    if (!result) {
+      this.appendLines([ru ? 'СРЕДА ВЫПОЛНЕНИЯ НЕ ПОДКЛЮЧЕНА.' : 'THE EXECUTION ENVIRONMENT IS NOT CONNECTED.', ''])
+      return
+    }
+    if (!result.ok) {
+      this.appendLines([
+        ru ? `ЗАПУСК ОТКАЗАН: ${result.name}` : `LAUNCH REFUSED: ${result.name}`,
+        result.message[this.language],
+        ...(result.diagnostics?.length
+          ? formatDiagnostics(result.diagnostics).map((line) => `  ${line}`)
+          : []),
+        '',
+      ])
+      return
+    }
+
+    this.appendLines([
+      ru ? `ПРОГРАММА ЗАПУЩЕНА: ${result.name} (PID ${result.pid})` : `PROGRAM STARTED: ${result.name} (PID ${result.pid})`,
+      ru ? 'ПРОСМОТР: ps · ОСТАНОВКА: kill <PID>' : 'WATCH: ps · STOP: kill <PID>',
+      '',
+    ])
+  }
+
+  /** `kill|pause|resume <pid>` — the control verbs of the shell. */
+  private controlProgram(verb: 'kill' | 'pause' | 'resume', rawArgument: string): void {
+    const ru = this.language === 'ru'
+    const data = this.robotData
+    if (!data) {
+      this.appendLines([ru ? 'СРЕДА ВЫПОЛНЕНИЯ НЕ ПОДКЛЮЧЕНА.' : 'THE EXECUTION ENVIRONMENT IS NOT CONNECTED.', ''])
+      return
+    }
+
+    const pid = Number.parseInt(rawArgument.trim(), 10)
+    if (!Number.isFinite(pid)) {
+      this.appendLines([
+        ru ? `ФОРМАТ: ${verb} <PID>` : `USAGE: ${verb} <PID>`,
+        '',
+      ])
+      return
+    }
+
+    const program = data.getProgram(pid)
+    if (!program) {
+      this.appendLines([
+        ru ? `ОШИБКА: ПРОЦЕСС НЕ НАЙДЕН: ${pid}` : `ERROR: PROCESS NOT FOUND: ${pid}`,
+        ru ? 'СПИСОК ПРОЦЕССОВ: ps' : 'LIST THE PROCESSES: ps',
+        '',
+      ])
+      return
+    }
+
+    const ok = verb === 'kill'
+      ? data.killProcess(pid)
+      : verb === 'pause'
+        ? data.suspendProcess(pid)
+        : data.resumeProcess(pid)
+
+    if (!ok) {
+      this.appendLines([
+        ru ? `ОТКАЗ: ${program.name} (PID ${pid}) НЕЛЬЗЯ ${verb === 'kill' ? 'ЗАВЕРШИТЬ' : verb === 'pause' ? 'ПРИОСТАНОВИТЬ' : 'ПРОДОЛЖИТЬ'}.` : `REFUSED: ${program.name} (PID ${pid}) CANNOT BE ${verb === 'kill' ? 'TERMINATED' : verb === 'pause' ? 'SUSPENDED' : 'RESUMED'}.`,
+        ru ? `СОСТОЯНИЕ: ${program.state}` : `STATE: ${program.state}`,
+        '',
+      ])
+      return
+    }
+
+    const done = verb === 'kill'
+      ? (ru ? 'ПРОЦЕСС ЗАВЕРШЁН.' : 'PROCESS TERMINATED.')
+      : verb === 'pause'
+        ? (ru ? 'ПРОЦЕСС ПРИОСТАНОВЛЕН.' : 'PROCESS SUSPENDED.')
+        : (ru ? 'ПРОЦЕСС ПРОДОЛЖЕН.' : 'PROCESS RESUMED.')
+    this.appendLines([`${program.name} (PID ${pid}): ${done}`, ''])
   }
 
   private printDirectory(rawPath: string): void {
@@ -2265,23 +2567,32 @@ export class ConsoleWindow implements GameWindow {
         '05. vim — открыть редактор профиля движения.',
         '06. manual — повторно показать эту инструкцию.',
         '07. clear — полностью очистить экран консоли.',
-        '08. start — попробовать запустить робота; при отказе будет показан список блокирующих проблем.',
+        '08. start — запустить программу запуска тела /opt/firmware/motion/body-startup.rasm;',
+        '    программа проверяет аппаратуру сама и пишет код отказа в DIAG (1..5).',
         '09. ↑/↓ — история введённых команд; ←/→, Home/End — курсор в строке ввода;',
         '    Backspace/Delete — правка символа; TAB — автодополнение видимых команд.',
         '',
+        'ПРОЦЕССЫ:',
+        '10. ps — таблица процессов робота: сервисы и запущенные программы.',
+        '11. run <путь> — скомпилировать .rasm из хранилища и запустить как процесс.',
+        '12. kill <PID> — завершить процесс.',
+        '13. pause <PID> — приостановить процесс (состояние сохраняется).',
+        '14. resume <PID> — продолжить приостановленный процесс.',
+        'Запуск программы блокируется, если вычислительный узел (CPU-730) или ядро (OSK-710) недоступны.',
+        '',
         'ФАЙЛОВЫЕ КОМАНДЫ:',
-        '10. ls [путь] — содержимое каталога.',
-        '11. cat <путь> — прочитать файл.',
-        '12. touch <путь> — создать файл (лимиты: файлы и общий объём).',
-        '13. rm <путь> / mv <а> <б> — удалить или переименовать созданный вами файл.',
-        '14. find <слово> — поиск по путям и содержимому.',
-        '15. df — заполнение файлового хранилища и лимиты.',
-        '16. vim [путь] — правка файлов; создать новый можно командой touch.',
+        '15. ls [путь] — содержимое каталога.',
+        '16. cat <путь> — прочитать файл.',
+        '17. touch <путь> — создать файл (лимиты: файлы и общий объём).',
+        '18. rm <путь> / mv <а> <б> — удалить или переименовать созданный вами файл.',
+        '19. find <слово> — поиск по путям и содержимому.',
+        '20. df — заполнение файлового хранилища и лимиты.',
+        '21. vim [путь] — правка файлов; создать новый можно командой touch.',
         '',
         'КАТАЛОГИ:',
-        '17. cd <путь> — перейти в каталог (как в cmd): cd .. — вверх, cd — текущий путь.',
-        '18. pwd — показать текущий каталог.',
-        '19. mkdir <путь> / rmdir <путь> — создать каталог или удалить пустой созданный вами.',
+        '22. cd <путь> — перейти в каталог (как в cmd): cd .. — вверх, cd — текущий путь.',
+        '23. pwd — показать текущий каталог.',
+        '24. mkdir <путь> / rmdir <путь> — создать каталог или удалить пустой созданный вами.',
         'Пути файловых команд считаются от текущего каталога; абсолютные начинаются с /.',
         '',
         'Не обходите защиту: запуск блокируется при невосстановленных критических подсистемах.',
@@ -2298,23 +2609,32 @@ export class ConsoleWindow implements GameWindow {
       '05. vim — open the motion-profile editor.',
       '06. manual — print this manual again.',
       '07. clear — fully clear the console screen.',
-      '08. start — attempt to start the robot; blocking faults are listed if startup is refused.',
+      '08. start — launch the body startup program /opt/firmware/motion/body-startup.rasm;',
+      '    the program checks the hardware itself and writes the failure code to DIAG (1..5).',
       '09. ↑/↓ — command history; ←/→, Home/End — cursor inside the input line;',
       '    Backspace/Delete — edit a character; TAB — autocomplete visible commands.',
       '',
+      'PROCESSES:',
+      '10. ps — process table: robot services and running programs.',
+      '11. run <path> — compile a stored .rasm file and start it as a process.',
+      '12. kill <PID> — terminate a process.',
+      '13. pause <PID> — suspend a process (its state is kept).',
+      '14. resume <PID> — continue a suspended process.',
+      'Program launch is blocked while the compute unit (CPU-730) or the kernel (OSK-710) is unavailable.',
+      '',
       'FILE COMMANDS:',
-      '10. ls [path] — list a directory.',
-      '11. cat <path> — read a file.',
-      '12. touch <path> — create a file (file-count and size quotas apply).',
-      '13. rm <path> / mv <a> <b> — remove or rename a file you created.',
-      '14. find <term> — search paths and contents.',
-      '15. df — storage fill levels and quotas.',
-      '16. vim [path] — edit files; create a new one with touch.',
+      '15. ls [path] — list a directory.',
+      '16. cat <path> — read a file.',
+      '17. touch <path> — create a file (file-count and size quotas apply).',
+      '18. rm <path> / mv <a> <b> — remove or rename a file you created.',
+      '19. find <term> — search paths and contents.',
+      '20. df — storage fill levels and quotas.',
+      '21. vim [path] — edit files; create a new one with touch.',
       '',
       'DIRECTORIES:',
-      '17. cd <path> — change directory (like cmd): cd .. — go up, cd — print the current path.',
-      '18. pwd — print the current directory.',
-      '19. mkdir <path> / rmdir <path> — create a directory or remove an empty one you created.',
+      '22. cd <path> — change directory (like cmd): cd .. — go up, cd — print the current path.',
+      '23. pwd — print the current directory.',
+      '24. mkdir <path> / rmdir <path> — create a directory or remove an empty one you created.',
       'File-command paths resolve from the current directory; absolute paths start with /.',
       '',
       'Do not bypass safety systems: startup is blocked while critical systems remain unrecovered.',

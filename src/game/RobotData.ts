@@ -1,6 +1,8 @@
 import type { RobotSystem, RuntimeComponent, RuntimeStatus, SystemEvent } from './Game'
 import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem, formatBytes, type VirtualStorageUsage } from './VirtualFileSystem'
+import type { RobotKernel } from './runtime/RobotKernel'
+import type { LaunchResult, RobotProgram } from './runtime/types'
 
 export interface RobotPerformance {
   /** Smoothed frames per second. */
@@ -28,7 +30,7 @@ export interface RobotParameter {
   level: RobotParameterLevel
 }
 
-export type RobotProcessState = 'RUNNING' | 'DEGRADED' | 'WAITING' | 'STOPPED' | 'FAULT'
+export type RobotProcessState = 'RUNNING' | 'DEGRADED' | 'WAITING' | 'SUSPENDED' | 'STOPPED' | 'FAULT'
 
 export interface RobotProcess {
   pid: number
@@ -38,6 +40,12 @@ export interface RobotProcess {
   memoryKb: number
   state: RobotProcessState
   detail: Record<GameLanguage, string>
+  /** System services come from the component registry, programs from the kernel. */
+  kind: 'service' | 'program'
+  /** Source path of a user program, when it was launched from storage. */
+  path?: string | null
+  /** Instructions a user program has retired. */
+  instructions?: number
 }
 
 interface ProcessDefinition {
@@ -106,6 +114,8 @@ export class RobotData {
   private readonly system: RobotSystem
   private readonly fileSystem: VirtualFileSystem
   private readonly activeWindowId: () => string | null
+  /** The process table; null when the game runs without a runtime. */
+  private readonly kernel: RobotKernel | null
 
   private uptime = 0
   private frameTimeEma = TARGET_FRAME_MS
@@ -119,10 +129,12 @@ export class RobotData {
     system: RobotSystem,
     fileSystem: VirtualFileSystem,
     activeWindowId: () => string | null = () => null,
+    kernel: RobotKernel | null = null,
   ) {
     this.system = system
     this.fileSystem = fileSystem
     this.activeWindowId = activeWindowId
+    this.kernel = kernel
   }
 
   // ---------------------------------------------------------------- robot state
@@ -232,6 +244,19 @@ export class RobotData {
     return clamp(37 + load * 0.24 + coolingBonus + motionBonus + drift, 28, 96)
   }
 
+  /**
+   * Remaining battery charge in percent.
+   *
+   * The pack charges slowly while the primary source is stable and drains a
+   * little while the robot works, so the BATT port reports a live reading.
+   */
+  getBatteryPercent(): number {
+    const charging = this.system.reactorRestored ? 11 : 0
+    const drain = this.system.motionStartupComplete ? 6 : 0
+    const drift = Math.sin(this.uptime / 45) * 2.5
+    return clamp(Math.round(63 + charging - drain + drift), 8, 100)
+  }
+
   /** Rail draw in watts: each restored subsystem adds its share of the load. */
   getPowerWatts(): number {
     let watts = 96
@@ -310,7 +335,11 @@ export class RobotData {
 
   // ----------------------------------------------------------------- processes
 
-  /** Live process table: shares are renormalized over the services that run. */
+  /**
+   * Live process table: system services first, then the programs the operator
+   * has launched. Service shares are renormalized over the services that run;
+   * a program reports the share of the compute budget it actually used.
+   */
   getProcesses(): RobotProcess[] {
     const load = this.computeLoad()
     const base = PROCESS_DEFINITIONS.map((definition) => {
@@ -328,7 +357,7 @@ export class RobotData {
       return Math.round(definition.memoryKb * factor)
     }
 
-    return base.map(({ definition, state, weight }) => {
+    const services = base.map(({ definition, state, weight }) => {
       const cpu = totalWeight > 0 ? (load * weight) / totalWeight : 0
       return {
         pid: definition.pid,
@@ -338,8 +367,87 @@ export class RobotData {
         memoryKb: memoryKb(definition, state),
         state,
         detail: definition.detail,
+        kind: 'service' as const,
+        path: null,
+        instructions: 0,
       }
     })
+
+    return [...services, ...this.getProgramProcesses()]
+  }
+
+  /** User programs, rendered as rows of the same process table. */
+  private getProgramProcesses(): RobotProcess[] {
+    return this.listPrograms().map((program) => ({
+      pid: program.pid,
+      name: program.name,
+      componentId: null,
+      cpuPercent: Math.round(program.cpuPercent * 10) / 10,
+      memoryKb: program.memoryKb,
+      state: program.state,
+      detail: program.detail,
+      kind: 'program' as const,
+      path: program.path,
+      instructions: program.instructions,
+    }))
+  }
+
+  /** Every program the kernel knows about, live ones first. */
+  listPrograms(): RobotProgram[] {
+    return this.kernel?.list() ?? []
+  }
+
+  /** Every program launched from a given path, live ones first. */
+  listProgramsByPath(path: string): RobotProgram[] {
+    return this.kernel?.listByPath(path) ?? []
+  }
+
+  /** One program by PID, or undefined. */
+  getProgram(pid: number): RobotProgram | undefined {
+    return this.kernel?.get(pid)
+  }
+
+  /**
+   * Compile a source and start it as a process.
+   *
+   * The kernel refuses the launch when the source does not build, when the
+   * compute chain is down, or when too many programs are already live.
+   */
+  launchProgram(
+    source: string,
+    options: { name?: string; path?: string; priority?: number } = {},
+  ): LaunchResult | null {
+    return this.kernel?.launch(source, options) ?? null
+  }
+
+  /** Terminate a program. Returns false when the PID is unknown or already over. */
+  killProcess(pid: number): boolean {
+    return this.kernel?.kill(pid) ?? false
+  }
+
+  /** Pause a program; it keeps its state and resumes where it stopped. */
+  suspendProcess(pid: number): boolean {
+    return this.kernel?.suspend(pid) ?? false
+  }
+
+  /** Continue a suspended program. */
+  resumeProcess(pid: number): boolean {
+    return this.kernel?.resume(pid) ?? false
+  }
+
+  /** Restart a program from its source, clearing the error state. */
+  resetProcess(pid: number): boolean {
+    return this.kernel?.reset(pid) ?? false
+  }
+
+  /** Read a kernel latch a program wrote (BOOT, DIAG). */
+  readLatch(name: string): number {
+    return this.kernel?.readLatch(name) ?? 0
+  }
+
+  /** Clear the kernel latches, so the next run reports its own result only. */
+  resetLatches(): void {
+    this.kernel?.resetLatches()
   }
 
   /** Which window the shell currently hosts; shown as the shell process detail. */

@@ -7,6 +7,7 @@ import type { DemoScenario } from '../rasm/scenario'
 import { DEMO_DEVICES } from '../rasm/scenario'
 import { REGISTER_COUNT, RAM_SIZE } from '../rasm/types'
 import type { ProcessorSnapshot } from '../rasm/processor'
+import { ROBOT_PORTS, type RobotDeviceBus, type RobotPort } from '../runtime/RobotDeviceBus'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
@@ -61,18 +62,33 @@ OVERHEAT:
 
 export interface RasmWindowOptions {
   scenario?: DemoScenario
+  /**
+   * Bus bound to the robot's real hardware.
+   *
+   * When it is present the window can switch to ROBOT mode: the program then
+   * runs against the actual components, so a script that drives an unpowered
+   * actuator is refused by the machine itself.
+   */
+  robotBus?: RobotDeviceBus
   /** Called when a program passes compilation, so the level can react. */
   onProgramValidated?: (source: string) => void
 }
+
+/** Which hardware the debugger is bound to. */
+type RasmMode = 'DEMO' | 'ROBOT'
 
 export class RasmWindow implements GameWindow {
   readonly id = 'rasm'
 
   private manager: WindowManager | null = null
   private language: GameLanguage = 'ru'
-  private readonly debugger: Debugger
+  private readonly demoDebugger: Debugger
+  /** Second debugger, bound to the robot's real bus; null without hardware. */
+  private readonly robotDebugger: Debugger | null
+  private readonly robotBus: RobotDeviceBus | null
   private readonly scenario: DemoScenario | undefined
   private readonly onProgramValidated?: (source: string) => void
+  private mode: RasmMode = 'DEMO'
 
   private buffer: string[] = RASM_DEFAULT_PROGRAM.replace(/\r\n/g, '\n').split('\n')
   private cursorRow = 0
@@ -87,11 +103,26 @@ export class RasmWindow implements GameWindow {
   constructor(options: RasmWindowOptions = {}) {
     this.scenario = options.scenario
     this.onProgramValidated = options.onProgramValidated
-    this.debugger = new Debugger({
+    this.robotBus = options.robotBus ?? null
+    this.demoDebugger = new Debugger({
       bus: options.scenario?.bus,
       onBreakpoint: () => playSfx('selection'),
     })
+    this.robotDebugger = options.robotBus
+      ? new Debugger({ bus: options.robotBus, onBreakpoint: () => playSfx('selection') })
+      : null
     this.compile()
+  }
+
+  /** The debugger the window currently drives. */
+  private activeDebugger(): Debugger {
+    if (this.mode === 'ROBOT' && this.robotDebugger) return this.robotDebugger
+    return this.demoDebugger
+  }
+
+  /** True when the robot's real hardware is available for the ROBOT mode. */
+  get robotModeAvailable(): boolean {
+    return this.robotDebugger !== null
   }
 
   setLanguage(language: GameLanguage): void {
@@ -165,6 +196,10 @@ export class RasmWindow implements GameWindow {
       this.compile(true)
       return
     }
+    if (code === 'KeyM') {
+      this.toggleMode()
+      return
+    }
 
     // Pane switching and navigation.
     if (code === 'Tab') {
@@ -197,8 +232,35 @@ export class RasmWindow implements GameWindow {
     }
   }
 
+  /**
+   * Switch the debugger between the demo board and the robot's real hardware.
+   *
+   * The source and the breakpoints travel with the session, so the operator can
+   * look at the same program on both sides.
+   */
+  private toggleMode(): void {
+    if (!this.robotDebugger) {
+      this.setMessage(this.language === 'ru'
+        ? 'РЕЖИМ ROBOT НЕДОСТУПЕН: АППАРАТУРА НЕ ПОДКЛЮЧЕНА'
+        : 'ROBOT MODE UNAVAILABLE: NO HARDWARE ATTACHED', true)
+      return
+    }
+
+    const previous = this.activeDebugger()
+    const breakpoints = previous.getBreakpoints()
+    const next: RasmMode = this.mode === 'DEMO' ? 'ROBOT' : 'DEMO'
+    this.mode = next
+    const target = this.activeDebugger()
+    target.load(this.buffer.join('\n'))
+    for (const line of breakpoints) target.setBreakpoint(line, true)
+    this.popup.hide()
+    this.setMessage(this.language === 'ru'
+      ? `РЕЖИМ: ${next === 'ROBOT' ? 'РОБОТ — АППАРАТУРА РЕАЛЬНАЯ' : 'ДЕМО — УЧЕБНЫЙ СТЕНД'}`
+      : `MODE: ${next === 'ROBOT' ? 'ROBOT — REAL HARDWARE' : 'DEMO — TEST BENCH'}`)
+  }
+
   private compile(announce = false): void {
-    const result = this.debugger.load(this.buffer.join('\n'))
+    const result = this.activeDebugger().load(this.buffer.join('\n'))
     this.popup.hide()
     if (result.ok) {
       if (announce || this.messageIsError) {
@@ -219,11 +281,12 @@ export class RasmWindow implements GameWindow {
   }
 
   private run(): void {
-    if (!this.debugger.hasProgram()) {
+    const dbg = this.activeDebugger()
+    if (!dbg.hasProgram()) {
       this.compile(true)
       return
     }
-    const result = this.debugger.run(20000)
+    const result = dbg.run(20000)
     switch (result.reason) {
       case 'halted':
         playSfx('correct')
@@ -264,14 +327,15 @@ export class RasmWindow implements GameWindow {
   }
 
   private stepOnce(): void {
-    if (!this.debugger.hasProgram()) {
+    const dbg = this.activeDebugger()
+    if (!dbg.hasProgram()) {
       this.compile(true)
       return
     }
     this.popup.hide()
-    const ran = this.debugger.step()
+    const ran = dbg.step()
     if (!ran) {
-      const reason = this.debugger.explainStep()
+      const reason = dbg.explainStep()
       if (reason) {
         const isError = reason.code !== 'PROCESSOR_HALTED'
         this.setMessage(this.language === 'ru'
@@ -281,7 +345,7 @@ export class RasmWindow implements GameWindow {
       }
       return
     }
-    const snapshot = this.debugger.snapshot()
+    const snapshot = dbg.snapshot()
     if (snapshot.state === 'error') {
       playSfx('incorrect')
       this.setMessage(this.language === 'ru'
@@ -292,15 +356,18 @@ export class RasmWindow implements GameWindow {
   }
 
   private resetMachine(): void {
-    this.debugger.reset()
-    this.scenario?.reset()
+    this.activeDebugger().reset()
+    // The demo board returns to its initial conditions; the robot's own
+    // hardware is not touched by a debugger reset.
+    if (this.mode === 'DEMO') this.scenario?.reset()
+    else this.robotBus?.clearLatches()
     this.popup.hide()
     this.setMessage(this.language === 'ru' ? 'СБРОС: PC=0, РЕГИСТРЫ И RAM ОЧИЩЕНЫ' : 'RESET: PC=0, REGISTERS AND RAM CLEARED')
   }
 
   private toggleBreakpoint(): void {
     const line = this.cursorRow + 1
-    const on = this.debugger.toggleBreakpoint(line)
+    const on = this.activeDebugger().toggleBreakpoint(line)
     if (this.scenario) playSfx(on ? 'connected' : 'disconnected')
     this.setMessage(this.language === 'ru'
       ? `ТОЧКА ОСТАНОВА ${on ? 'ВКЛ' : 'ВЫКЛ'}: СТРОКА ${line}`
@@ -309,7 +376,7 @@ export class RasmWindow implements GameWindow {
 
   /** Keep the source cursor on the instruction the PC is about to run. */
   private syncCursorToPc(): void {
-    const line = this.debugger.snapshot().currentLine
+    const line = this.activeDebugger().snapshot().currentLine
     if (line !== null && line >= 1 && line <= this.buffer.length) this.cursorRow = line - 1
   }
 
@@ -342,7 +409,7 @@ export class RasmWindow implements GameWindow {
     const textProgress = clamp01((this.appearTime - APPEAR_TEXT_START) / APPEAR_TEXT)
     const footerAlpha = clamp01((this.appearTime - APPEAR_FOOTER_START) / APPEAR_FOOTER)
 
-    const snapshot = this.debugger.snapshot()
+    const snapshot = this.activeDebugger().snapshot()
     const footerHeight = Math.min(150, Math.max(110, Math.floor(height * 0.32)))
     const bodyTop = margin
     const bodyBottom = Math.max(bodyTop + lineHeight * 6, height - footerHeight - 9)
@@ -394,6 +461,17 @@ export class RasmWindow implements GameWindow {
     ctx.font = style.boldFont
     ctx.fillStyle = '#ffd02f'
     ctx.fillText(this.language === 'ru' ? 'ИСХОДНЫЙ КОД RASM' : 'RASM SOURCE', x + 6, y + 5)
+    ctx.font = style.tinyFont
+    ctx.fillStyle = this.mode === 'ROBOT' ? '#b6ff9a' : '#8fce9f'
+    ctx.textAlign = 'right'
+    ctx.fillText(
+      this.mode === 'ROBOT'
+        ? (this.language === 'ru' ? 'РЕЖИМ: РОБОТ' : 'MODE: ROBOT')
+        : (this.language === 'ru' ? 'РЕЖИМ: ДЕМО' : 'MODE: DEMO'),
+      x + width - 6,
+      y + 5,
+    )
+    ctx.textAlign = 'left'
 
     const top = y + style.lineHeight * 1.7
     const bottom = y + height - 5
@@ -409,7 +487,8 @@ export class RasmWindow implements GameWindow {
     const currentLine = style.snapshot.currentLine
     // Highlight the source line of the fault, if the last execution stopped on one.
     const errorLine = style.snapshot.error && style.snapshot.error.line >= 1 ? style.snapshot.error.line : null
-    const diagnosticLines = new Set(this.debugger.errors.map((d) => d.line))
+    const dbg = this.activeDebugger()
+    const diagnosticLines = new Set(dbg.errors.map((d) => d.line))
 
     for (let row = 0; row < rows; row += 1) {
       const lineIndex = this.scrollTop + row
@@ -420,7 +499,7 @@ export class RasmWindow implements GameWindow {
       const isCursor = lineIndex === this.cursorRow
       const isCurrent = lineNumber === currentLine
       const isError = lineNumber === errorLine
-      const hasBreakpoint = this.debugger.hasBreakpoint(lineNumber)
+      const hasBreakpoint = dbg.hasBreakpoint(lineNumber)
       const hasDiagnostic = diagnosticLines.has(lineNumber)
 
       if (isCurrent) {
@@ -577,7 +656,7 @@ export class RasmWindow implements GameWindow {
 
     // Diagnostics list (first three).
     let cursorY = y + 6 + Math.ceil(11 * 1.4)
-    const diagnostics = this.debugger.errors.slice(0, 3)
+    const diagnostics = this.activeDebugger().errors.slice(0, 3)
     if (diagnostics.length) {
       ctx.fillStyle = '#ff9861'
       for (const diagnostic of diagnostics) {
@@ -587,31 +666,70 @@ export class RasmWindow implements GameWindow {
       }
     } else {
       // Device panel: name, current value, last direction.
-      const devices = DEMO_DEVICES
-      ctx.fillStyle = '#8fce9f'
-      for (const device of devices) {
-        const value = this.deviceValue(device.name)
-        const text = `${device.name.padEnd(6, ' ')} ${String(value).padStart(5, ' ')}  ${device.description}`
-        ctx.fillStyle = device.name === 'MOTOR' && value > 0 ? '#b6ff9a' : '#8fce9f'
-        ctx.fillText(this.fitText(ctx, text, width - pad * 2), x + pad, cursorY)
+      const rows = this.deviceRows()
+      const hintBottom = y + height - Math.ceil(11 * 1.6)
+      const maxRows = Math.max(1, Math.floor((hintBottom - cursorY - 4) / Math.ceil(11 * 1.35)))
+      for (const row of rows.slice(0, maxRows)) {
+        ctx.fillStyle = row.hot ? '#b6ff9a' : '#8fce9f'
+        ctx.fillText(this.fitText(ctx, row.text, width - pad * 2), x + pad, cursorY)
         cursorY += Math.ceil(11 * 1.35)
+      }
+      if (rows.length > maxRows) {
+        ctx.fillStyle = '#6f8f78'
+        ctx.fillText(
+          this.fitText(ctx, `+${rows.length - maxRows} ${this.language === 'ru' ? 'ПОРТОВ' : 'PORTS'}`, width - pad * 2),
+          x + pad,
+          cursorY,
+        )
       }
     }
 
     // Control hints pinned to the bottom.
     const hints = this.language === 'ru'
-      ? 'F5/R ЗАПУСК · F8/S ШАГ · F9/G СБРОС · F10/B ТОЧКА ОСТАНОВА · C СБОРКА · TAB ПАНЕЛЬ · ↑↓ СТРОКА · ESC ВЫХОД'
-      : 'F5/R RUN · F8/S STEP · F9/G RESET · F10/B BREAKPOINT · C COMPILE · TAB PANE · ↑↓ LINE · ESC EXIT'
+      ? 'F5/R ЗАПУСК · F8/S ШАГ · F9/G СБРОС · F10/B ТОЧКА ОСТАНОВА · C СБОРКА · M РЕЖИМ · TAB ПАНЕЛЬ · ESC ВЫХОД'
+      : 'F5/R RUN · F8/S STEP · F9/G RESET · F10/B BREAKPOINT · C COMPILE · M MODE · TAB PANE · ESC EXIT'
     ctx.fillStyle = '#c39a37'
     ctx.fillText(this.fitText(ctx, hints, width - pad * 2), x + pad, y + height - Math.ceil(11 * 1.6))
     ctx.restore()
   }
 
-  private deviceValue(name: string): number {
+  /**
+   * Rows of the device panel.
+   *
+   * In DEMO mode the panel shows the two devices of the test bench; in ROBOT
+   * mode it shows the real ports of the machine together with the state of the
+   * component that backs them.
+   */
+  private deviceRows(): { text: string; hot: boolean }[] {
+    if (this.mode === 'ROBOT' && this.robotBus) return this.robotDeviceRows()
     const source = this.scenario?.bus
-    if (!source) return 0
-    const result = source.read(name)
-    return result.ok ? result.value : 0
+    if (!source) return []
+    return DEMO_DEVICES.map((device) => {
+      const result = source.read(device.name)
+      const value = result.ok ? result.value : 0
+      const text = `${device.name.padEnd(6, ' ')} ${String(value).padStart(5, ' ')}  ${device.description}`
+      return { text, hot: device.name === 'MOTOR' && value > 0 }
+    })
+  }
+
+  /** The robot's real ports with the state of the component behind them. */
+  private robotDeviceRows(): { text: string; hot: boolean }[] {
+    const bus = this.robotBus
+    if (!bus) return []
+    return ROBOT_PORTS.map((port) => {
+      const result = bus.read(port.name)
+      const value = result.ok ? result.value : 0
+      const note = result.ok ? this.robotPortNote(port) : this.language === 'ru' ? 'НЕДОСТУПЕН' : 'UNAVAILABLE'
+      const text = `${port.name.padEnd(7, ' ')} ${String(value).padStart(5, ' ')}  ${note}`
+      return { text, hot: result.ok && port.kind === 'sensor' && value > 0 }
+    })
+  }
+
+  /** Short note about the component that backs a port. */
+  private robotPortNote(port: RobotPort): string {
+    if (!this.robotBus) return port.componentId
+    const status = this.robotBus.componentStatus(port.componentId)
+    return `${port.componentId} ${status}`
   }
 
   // -------------------------------------------------------------- primitives

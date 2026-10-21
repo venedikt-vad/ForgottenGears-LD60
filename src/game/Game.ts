@@ -19,6 +19,8 @@ import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem } from './VirtualFileSystem'
 import { RobotData } from './RobotData'
 import { DemoScenario, DEMO_PROGRAM_PATH } from './rasm/scenario'
+import { RobotDeviceBus } from './runtime/RobotDeviceBus'
+import { RobotKernel } from './runtime/RobotKernel'
 
 export type RuntimeStatus = 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'CRITICAL' | 'MISSING' | 'LOCKED'
 export type RuntimeCategory = 'POWER' | 'COMPUTE' | 'OS' | 'SENSORS' | 'MOTION' | 'THERMAL' | 'SAFETY' | 'NETWORK' | 'BODY' | 'SYSTEM'
@@ -48,10 +50,13 @@ export type AnalyzerChannelState = 'NO_FEED' | 'DISABLED' | 'READY' | 'ONLINE' |
 
 const INITIAL_COMPONENTS: RuntimeComponent[] = [
   { id: 'PWR-100', name: 'Primary Power Core', category: 'POWER', status: 'DEGRADED', description: 'Primary source of electrical power.', dependencies: [], affects: ['RCTR-110', 'PDU-230'], fault: 'Output is not yet validated by the reactor controller.', recommendation: 'Open the reactor panel and complete the startup alignment.', windowId: 'reactor' },
+  { id: 'RCTR-110', name: 'Reactor Controller', category: 'POWER', status: 'DEGRADED', description: 'Runs the safe-start sequence of the primary power core.', dependencies: [], affects: ['PWR-100', 'PDU-230'], fault: 'Safe-start sequence is not configured.', recommendation: 'Open the reactor panel and complete the startup alignment.', windowId: 'reactor' },
   { id: 'BAT-220', name: 'Battery Pack', category: 'POWER', status: 'ONLINE', description: 'Backup energy store.', dependencies: [], affects: ['BMS-221', 'PDU-230'], fault: 'No active fault reported.', recommendation: 'No action required.' },
   { id: 'BMS-221', name: 'Battery Management System', category: 'POWER', status: 'OFFLINE', description: 'Monitors and protects the battery.', dependencies: ['BAT-220'], affects: ['PDU-230'], fault: 'Telemetry is degraded.', recommendation: 'Inspect battery telemetry after primary power recovery.' },
   { id: 'PDU-230', name: 'Power Distribution Unit', category: 'POWER', status: 'DEGRADED', description: 'Routes power to the individual system rails.', dependencies: ['PWR-100', 'RCTR-110'], affects: ['BUS-T-240', 'ANL-450', 'ACT-610'], fault: 'Body and actuator rails are not enabled.', recommendation: 'Complete the reactor startup, then solve the distribution-grid puzzle.', windowId: 'powerDistribution' },
+  { id: 'BUS-T-240', name: 'Body Power Bus', category: 'POWER', status: 'OFFLINE', description: 'Energizes the torso and sensor rails from the primary source.', dependencies: ['PWR-100', 'PDU-230'], affects: ['ACT-610', 'CAM-410', 'IMU-430'], fault: 'BODY_MAIN route is not energized.', recommendation: 'Complete the reactor startup, then solve the distribution-grid puzzle.', windowId: 'powerDistribution' },
   { id: 'CPU-730', name: 'Central Processing Unit', category: 'COMPUTE', status: 'DEGRADED', description: 'Executes system tasks and subsystem logic.', dependencies: ['PDU-230', 'MEM-732'], affects: ['OSK-710', 'DGN-900', 'LOC-630'], fault: 'System memory and the kernel are not fully validated.', recommendation: 'Restore core memory and rerun diagnostics.', windowId: 'memoryCore' },
+  { id: 'MEM-732', name: 'System Memory', category: 'COMPUTE', status: 'DEGRADED', description: 'Working memory of the compute core.', dependencies: ['PDU-230'], affects: ['CPU-730', 'OSK-710', 'MCM-740'], fault: 'Memory table integrity has not been verified.', recommendation: 'Open the memory core panel and complete the integrity check.', windowId: 'memoryCore' },
   { id: 'MCM-740', name: 'Motion Command Memory', category: 'COMPUTE', status: 'DEGRADED', description: 'Stores and validates the motion command profile.', dependencies: ['MEM-732', 'OSK-710'], affects: ['LOC-630', 'ACT-610'], fault: 'PROFILE_CRC=FAILED; motion commands are being rejected.', recommendation: 'Read the motion-control documents and repair the .drv/.seq source in Vim.', windowId: 'editor' },
   { id: 'OSK-710', name: 'System Kernel', category: 'OS', status: 'ONLINE', description: 'Coordinates software services and hardware access.', dependencies: ['CPU-730', 'MEM-732'], affects: ['RTS-711', 'DGN-900'], fault: 'Some services cannot be initialized until memory validation passes.', recommendation: 'Restore core memory, then rerun diagnostics.' },
   { id: 'RTS-711', name: 'Real-Time Scheduler', category: 'OS', status: 'OFFLINE', description: 'Schedules time-critical tasks.', dependencies: ['OSK-710', 'CPU-730'], affects: ['LOC-630', 'BAL-640'], fault: 'Scheduler is not initialized.', recommendation: 'Repair and validate the startup profile, then run the recovery sequence.' },
@@ -62,8 +67,10 @@ const INITIAL_COMPONENTS: RuntimeComponent[] = [
   { id: 'ANL-450', name: 'Chemical & Atmospheric Analyzer', category: 'SENSORS', status: 'OFFLINE', description: 'Reads two independent measurement channels.', dependencies: ['PDU-230', 'BUS-T-240'], affects: ['DGN-900'], fault: 'Controller rail is off. After power-up, channel A has no feed and channel B is disabled.', recommendation: 'Enable the analyzer controller with `power ANL-450 on`, then inspect both channels in the analyzer panel.', windowId: 'analyzer' },
   { id: 'ACT-610', name: 'Actuator Control Bus', category: 'MOTION', status: 'DEGRADED', description: 'Carries control messages to the servo controllers.', dependencies: ['PDU-230', 'BUS-T-240'], affects: ['SRV-620', 'LOC-630', 'BAL-640'], fault: 'Actuator bus is not powered and its bypass has not been restored.', recommendation: 'Restore body power, then open the actuator-bus debug panel and complete the bypass maze.', windowId: 'maze' },
   { id: 'SRV-620', name: 'Servo & Joint Controller', category: 'MOTION', status: 'OFFLINE', description: 'Controls joint motors and position servos.', dependencies: ['ACT-610', 'PDU-230'], affects: ['LOC-630', 'BAL-640'], fault: 'Actuator bus and physical assemblies are not fully available.', recommendation: 'Restore power, inspect the body assembly map, and perform an unloaded test.' },
+  { id: 'LOC-630', name: 'Locomotion Controller', category: 'MOTION', status: 'LOCKED', description: 'Turns motion goals into actuator command sequences.', dependencies: ['CPU-730', 'ACT-610', 'RTS-711'], affects: ['BAL-640'], fault: 'Motion is locked until the safe startup sequence passes.', recommendation: 'Run the recovery sequence: "start" in the console.' },
   { id: 'BAL-640', name: 'Balance & Posture Engine', category: 'MOTION', status: 'OFFLINE', description: 'Stabilizes posture using inertial and force feedback.', dependencies: ['IMU-430', 'FRC-440', 'SRV-620'], affects: ['LOC-630'], fault: 'Sensor calibration and the actuator chain are incomplete.', recommendation: 'Calibrate balance after the sensor and actuator checks.' },
   { id: 'TMP-810', name: 'Thermal Sensor Array', category: 'THERMAL', status: 'ONLINE', description: 'Measures temperatures of key components.', dependencies: ['PDU-230'], affects: ['CLG-820', 'THP-830'], fault: 'Sensor is present but cooling-flow calibration is invalid.', recommendation: 'Validate flow readings in the cooling service panel.', windowId: 'cooling' },
+  { id: 'CLG-820', name: 'Cooling Circuit', category: 'THERMAL', status: 'DEGRADED', description: 'Removes heat from the compute and motion assemblies.', dependencies: ['PDU-230'], affects: ['TMP-810', 'THP-830'], fault: 'Coolant flow calibration is invalid.', recommendation: 'Validate flow readings in the cooling service panel.', windowId: 'cooling' },
   { id: 'THP-830', name: 'Overheat Protection Unit', category: 'SAFETY', status: 'ONLINE', description: 'Protects the system from thermal damage.', dependencies: ['TMP-810', 'CLG-820'], affects: ['CPU-730', 'SRV-620'], fault: 'Thermal protection remains armed because cooling is not verified.', recommendation: 'Repair the cooling circuit; do not bypass the interlock.' },
   { id: 'NET-510', name: 'External Command Link', category: 'NETWORK', status: 'OFFLINE', description: 'External communications and telemetry.', dependencies: ['PDU-230'], affects: ['DGN-900'], fault: 'No response.', recommendation: 'Inspect the network interface after core recovery.' },
   { id: 'DGN-900', name: 'Self-Diagnostic Suite', category: 'SYSTEM', status: 'ONLINE', description: 'Collects fault data and validates subsystem dependencies.', dependencies: ['CPU-730', 'OSK-710'], affects: ['FSF-910'], fault: 'Several component checks are still failing.', recommendation: 'Run diagnostics again after each major subsystem repair.' },
@@ -389,6 +396,12 @@ export class Game {
   private bgMusic: HTMLAudioElement | null = null
   /** Read-model shared by the interface windows; sampled once per frame. */
   private robotData: RobotData | null = null
+  /** Process table and scheduler of the robot's own programs. */
+  private kernel: RobotKernel | null = null
+  /** The shell that owns the `start` flow and the process control verbs. */
+  private consoleWindow: ConsoleWindow | null = null
+  /** Console language of the running session; every window follows it. */
+  private language: GameLanguage = 'ru'
 
   private player = { x: 200, y: 200, size: 32, speed: 240 }
   private readonly onResize = () => this.resize()
@@ -413,18 +426,55 @@ export class Game {
     this.robotSystem.reset()
 
     const fileSystem = new VirtualFileSystem()
+
+    // The hardware bus a program sees: it answers from the robot's real
+    // components, so a script can only touch hardware that is powered.
+    const deviceBus = new RobotDeviceBus(this.robotSystem)
+    // The kernel turns files into processes: it compiles the sources, hands
+    // every one of them a PID and schedules them against the compute budget.
+    const kernel = new RobotKernel({ system: this.robotSystem, bus: deviceBus })
+    this.kernel = kernel
+
     // Single read-model in front of RobotSystem + VirtualFileSystem; interface
     // windows consume it instead of touching the raw state or the disk layer.
-    const robotData = new RobotData(this.robotSystem, fileSystem, () => this.windows.activeId)
+    const robotData = new RobotData(this.robotSystem, fileSystem, () => this.windows.activeId, kernel)
     this.robotData = robotData
+    // Live sensor readings: the body temperature follows the real load, and the
+    // battery slowly charges while the primary source is up.
+    deviceBus.setSensors({
+      temperature: () => robotData.getTemperature(),
+      batteryPercent: () => robotData.getBatteryPercent(),
+    })
+
     const codeEditor = new CodeEditorWindow({
       fileSystem,
       returnWindowId: 'ui',
       onValidate: (_path, valid) => {
         if (valid) this.robotSystem.completeMotionProfile()
       },
+      onRun: (path, source) => {
+        // The editor hands the buffer to the kernel: it becomes a real process
+        // the operator can watch in the task manager and stop from the shell.
+        const result = robotData.launchProgram(source, { path })
+        if (!result) {
+          return this.language === 'ru'
+            ? 'ЗАПУСК НЕДОСТУПЕН: НЕТ СРЕДЫ ВЫПОЛНЕНИЯ.'
+            : 'RUN UNAVAILABLE: NO EXECUTION ENVIRONMENT.'
+        }
+        if (result.ok) {
+          this.robotSystem.log('INFO', 'RUNTIME', `Program ${result.pid} (${result.name}) started from ${path}.`)
+          return this.language === 'ru'
+            ? `ЗАПУЩЕНО: ${path} · PID ${result.pid}`
+            : `STARTED: ${path} · PID ${result.pid}`
+        }
+        this.robotSystem.log('ERROR', 'RUNTIME', `Program ${result.name} refused: ${result.message.en}`)
+        return this.language === 'ru'
+          ? `ОТКАЗ: ${result.message.ru}`
+          : `REFUSED: ${result.message.en}`
+      },
     })
-    const consoleWindow = new ConsoleWindow(fileSystem, codeEditor, this.robotSystem)
+    const consoleWindow = new ConsoleWindow(fileSystem, codeEditor, this.robotSystem, robotData)
+    this.consoleWindow = consoleWindow
     const uiWindow = new UiWindow(this.robotSystem, robotData)
     const taskManagerWindow = new TaskManagerWindow(robotData)
     const victoryWindow = new VictoryWindow()
@@ -444,6 +494,7 @@ export class Game {
     const rasmScenario = new DemoScenario()
     const rasmWindow = new RasmWindow({
       scenario: rasmScenario,
+      robotBus: deviceBus,
       onProgramValidated: () => this.robotSystem.completeMotionProfile(),
     })
     // Seed the debugger with the shipped sample so the player has a working
@@ -452,6 +503,7 @@ export class Game {
     if (sampleSource) rasmWindow.loadSource(sampleSource.join('\n'))
 
     const languageWindow = new LanguageSelectWindow((language: GameLanguage) => {
+      this.language = language
       consoleWindow.setLanguage(language)
       codeEditor.setLanguage(language)
       uiWindow.setLanguage(language)
@@ -563,6 +615,11 @@ export class Game {
     p.y = Math.max(half, Math.min(this.height - half, p.y))
     this.windows.update(dt)
     this.syncPuzzleProgress()
+    // The runtime lives outside the window manager: programs keep running while
+    // another window is open, and the shell notices a finished startup program
+    // even when the console is not the active window.
+    this.kernel?.tick(dt)
+    this.consoleWindow?.pollRuntime()
   }
 
   /**

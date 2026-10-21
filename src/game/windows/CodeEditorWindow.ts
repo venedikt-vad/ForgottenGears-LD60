@@ -3,6 +3,7 @@ import { FONT_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
 import { VirtualFileSystem, formatBytes, type VirtualFileErrorCode } from '../VirtualFileSystem'
 import { compileProgram, isRunnable } from '../rasm'
+import { STARTUP_PROGRAM_PATH } from '../runtime/constants'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
@@ -30,6 +31,12 @@ export interface CodeEditorOptions {
   initialPath?: string
   returnWindowId?: string
   onValidate?: (path: string, valid: boolean) => void
+  /**
+   * Called by the `:run` command. The editor hands the buffer over and the
+   * host decides what to do with it — in the game it becomes a real process.
+   * The callback returns a localized line for the editor's message strip.
+   */
+  onRun?: (path: string, source: string) => string
 }
 const DEFAULT_FILE = '/opt/firmware/motion/оптимизатор_акселерации_1.0.18.drv'
 const INSTRUCTION_FILE = '/opt/firmware/motion/ИНСТРУКЦИЯ'
@@ -192,6 +199,7 @@ export class CodeEditorWindow implements GameWindow {
   private readonly fileSystem: VirtualFileSystem
   private readonly returnWindowId: string
   private readonly onValidate?: (path: string, valid: boolean) => void
+  private readonly onRun?: (path: string, source: string) => string
   private files: string[] = []
   private selectedFileIndex = 0
   private currentPath = ''
@@ -236,6 +244,7 @@ export class CodeEditorWindow implements GameWindow {
     this.fileSystem = options.fileSystem ?? new VirtualFileSystem()
     this.returnWindowId = options.returnWindowId ?? 'ui'
     this.onValidate = options.onValidate
+    this.onRun = options.onRun
     this.refreshFileList()
     const wanted = options.initialPath ?? INSTRUCTION_FILE
     const initial = this.files.findIndex((path) => path.toLowerCase() === wanted.toLowerCase())
@@ -992,6 +1001,7 @@ export class CodeEditorWindow implements GameWindow {
         } else this.setMessage(this.language === 'ru' ? 'ДОСТУПНО: :set number / :set nonumber' : 'AVAILABLE: :set number / :set nonumber', true)
         break
       case 'check': this.validateProgram(); break
+      case 'run': this.runBuffer(); break
       case 'help': this.showHelp(); break
       case 'files': this.activePane = 'files'; this.setMessage(this.language === 'ru' ? 'ПАНЕЛЬ ФАЙЛОВ: ↑/↓, ENTER' : 'FILE PANE: ↑/↓, ENTER'); break
       default: this.setMessage(this.language === 'ru' ? `НЕИЗВЕСТНАЯ КОМАНДА :${command}` : `UNKNOWN COMMAND :${command}`, true)
@@ -1001,7 +1011,7 @@ export class CodeEditorWindow implements GameWindow {
     const raw = this.commandLine
     const match = /^(e|edit|e!|new|touch)\s+(.+)$/i.exec(raw)
     if (!match) {
-      const candidates = ['w', 'wq', 'q', 'q!', 'e ', 'e! ', 'new ', 'touch ', 'check', 'help', 'set number', 'set nonumber']
+      const candidates = ['w', 'wq', 'q', 'q!', 'e ', 'e! ', 'new ', 'touch ', 'check', 'run', 'help', 'set number', 'set nonumber']
       const prefix = raw.toLowerCase()
       const next = candidates.find((candidate) => candidate.toLowerCase().startsWith(prefix) && candidate !== raw)
       if (next) this.commandLine = next.toUpperCase()
@@ -1081,9 +1091,49 @@ export class CodeEditorWindow implements GameWindow {
     this.onValidate?.(this.currentPath, false)
   }
 
+  /**
+   * Hand the current buffer to the host so it becomes a running process.
+   *
+   * A protected program (the shipped body-startup routine) always runs from
+   * storage, never from the buffer: the buffer may hold edits that would skip
+   * the machine's own checks, and the file itself cannot be modified.
+   */
+  private runBuffer(): void {
+    const path = this.currentPath
+    if (!path) {
+      this.setMessage(this.language === 'ru' ? 'НЕТ ОТКРЫТОГО ФАЙЛА' : 'NO FILE IS OPEN', true)
+      return
+    }
+    if (!this.onRun) {
+      this.setMessage(this.language === 'ru' ? 'ЗАПУСК НЕДОСТУПЕН В ЭТОМ ОКНЕ' : 'RUNNING IS NOT AVAILABLE IN THIS WINDOW', true)
+      return
+    }
+    if (!path.toLowerCase().endsWith('.rasm')) {
+      this.setMessage(this.language === 'ru' ? 'ЗАПУСКАЮТСЯ ТОЛЬКО ФАЙЛЫ .RASM' : 'ONLY .RASM FILES CAN BE RUN', true)
+      return
+    }
+
+    const protectedFile = this.isProtectedFile(path)
+    const stored = protectedFile ? this.readEditorFile(path)?.join('\n') ?? '' : ''
+    const source = protectedFile ? stored : this.buffer.join('\n')
+
+    const program = compileProgram(source)
+    if (!isRunnable(program)) {
+      const first = program.diagnostics[0]
+      this.setMessage(this.language === 'ru'
+        ? `ОШИБКА СБОРКИ: ${program.diagnostics.length} — СТРОКА ${first?.line ?? '?'}: ${first?.message ?? ''}`
+        : `COMPILE FAILED: ${program.diagnostics.length} — LINE ${first?.line ?? '?'}: ${first?.message ?? ''}`, true)
+      playSfx('incorrect')
+      return
+    }
+
+    const message = this.onRun(path, source)
+    this.setMessage(message)
+  }
+
   private saveFile(): boolean {
     if (!this.currentPath) return false
-    if (this.isInstructionFile(this.currentPath) || this.isSupplementalFile(this.currentPath) || !EDITABLE_EXTENSION.test(this.currentPath)) {
+    if (this.isInstructionFile(this.currentPath) || this.isSupplementalFile(this.currentPath) || this.isProtectedFile(this.currentPath) || !EDITABLE_EXTENSION.test(this.currentPath)) {
       this.setMessage(this.language === 'ru' ? 'ФОРМАТ ФАЙЛА ТОЛЬКО ДЛЯ ЧТЕНИЯ' : 'FILE FORMAT IS READ-ONLY', true)
       return false
     }
@@ -1143,6 +1193,14 @@ export class CodeEditorWindow implements GameWindow {
 
   private isSupplementalFile(path: string): boolean {
     return SUPPLEMENTAL_EDITOR_FILES.some((file) => file.path.toLowerCase() === path.toLowerCase())
+  }
+
+  /**
+   * The shipped body-startup routine is protected: it is part of the machine,
+   * so the operator may read and run it but never overwrite it.
+   */
+  private isProtectedFile(path: string): boolean {
+    return path.toLowerCase() === STARTUP_PROGRAM_PATH.toLowerCase()
   }
 
   private hasValidRecoveryCommand(lines: string[]): boolean {
@@ -1440,13 +1498,13 @@ export class CodeEditorWindow implements GameWindow {
     this.mode = 'COMMAND'
     this.commandLine = ''
     this.setMessage(this.language === 'ru'
-      ? 'КОМАНДА: :w :q :wq :e <путь> :new <путь> :check :help'
-      : 'COMMAND: :w :q :wq :e <path> :new <path> :check :help')
+      ? 'КОМАНДА: :w :q :wq :e <путь> :new <путь> :check :run :help'
+      : 'COMMAND: :w :q :wq :e <path> :new <path> :check :run :help')
   }
   private showHelp(): void {
     this.setMessage(this.language === 'ru'
-      ? 'ПРОХОЖДЕНИЕ: ↓, Enter, i, затем RESTORE_MOTION_PROFILE() — сохранение автоматическое; затем C или ESC — выход.'
-      : 'RECOVERY: Down, Enter, i, then RESTORE_MOTION_PROFILE() — save is automatic; then press C or ESC to return.')
+      ? 'ПРОХОЖДЕНИЕ: ↓, Enter, i, затем RESTORE_MOTION_PROFILE() — сохранение автоматическое; затем C или ESC — выход. :run — запустить .rasm как процесс.'
+      : 'RECOVERY: Down, Enter, i, then RESTORE_MOTION_PROFILE() — save is automatic; then press C or ESC to return. :run — start a .rasm file as a process.')
   }
   private exitEditor(): void {
     this.mode = 'NORMAL'

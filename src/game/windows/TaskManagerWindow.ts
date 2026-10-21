@@ -22,6 +22,7 @@ const COLORS = {
   yellow: '#ffd166',
   red: '#ff7782',
   cyan: '#7de5ff',
+  blue: '#9fb8ff',
   gray: '#a0afa4',
 }
 
@@ -40,6 +41,7 @@ function stateColor(state: RobotProcessState): string {
     case 'RUNNING': return COLORS.green
     case 'DEGRADED': return COLORS.yellow
     case 'WAITING': return COLORS.cyan
+    case 'SUSPENDED': return COLORS.blue
     case 'FAULT': return COLORS.red
     default: return COLORS.gray
   }
@@ -51,6 +53,7 @@ function stateLabel(state: RobotProcessState, language: GameLanguage): string {
       case 'RUNNING': return 'РАБОТАЕТ'
       case 'DEGRADED': return 'СБОЙНЫЙ'
       case 'WAITING': return 'ОЖИДАНИЕ'
+      case 'SUSPENDED': return 'ПАУЗА'
       case 'FAULT': return 'ОТКАЗ'
       default: return 'ОСТАНОВЛЕН'
     }
@@ -59,6 +62,7 @@ function stateLabel(state: RobotProcessState, language: GameLanguage): string {
     case 'RUNNING': return 'RUNNING'
     case 'DEGRADED': return 'DEGRADED'
     case 'WAITING': return 'WAITING'
+    case 'SUSPENDED': return 'SUSPENDED'
     case 'FAULT': return 'FAULT'
     default: return 'STOPPED'
   }
@@ -89,6 +93,9 @@ export class TaskManagerWindow implements GameWindow {
   private blinkClock = 0
   private wasPointerDown = false
   private processRows: Rect[] = []
+  /** Transient message shown after a control verb, empty when there is none. */
+  private notice = ''
+  private noticeClock = 0
 
   constructor(robotData: RobotData) {
     this.robotData = robotData
@@ -109,6 +116,14 @@ export class TaskManagerWindow implements GameWindow {
   update(dt: number, input: Input): void {
     this.appearTime += dt
     this.blinkClock += dt
+
+    if (this.notice) {
+      this.noticeClock += dt
+      if (this.noticeClock > 2.6) {
+        this.notice = ''
+        this.noticeClock = 0
+      }
+    }
 
     const processes = this.robotData.getProcesses()
     if (this.selectedIndex >= processes.length) this.selectedIndex = Math.max(0, processes.length - 1)
@@ -137,6 +152,11 @@ export class TaskManagerWindow implements GameWindow {
     if (input.wasPressed('PageDown')) move(8)
     if (input.wasPressed('Home')) this.selectedIndex = 0
     if (input.wasPressed('End')) this.selectedIndex = Math.max(0, processes.length - 1)
+
+    // Process control verbs act on the selected program row.
+    if (input.wasPressed('KeyK')) this.controlSelected('kill')
+    if (input.wasPressed('KeyP')) this.controlSelected('pause')
+    if (input.wasPressed('KeyR')) this.controlSelected('restart')
 
     const down = input.isPointerDown()
     if (down && !this.wasPointerDown) {
@@ -262,14 +282,63 @@ export class TaskManagerWindow implements GameWindow {
     ctx.fillStyle = COLORS.dim
     ctx.textAlign = 'left'
     const hint = this.language === 'ru'
-      ? '↑/↓: ВЫБОР ЗАДАЧИ · PAGEUP/PAGEDOWN: ПРОКРУТКА · ESC / C: КОНСОЛЬ'
-      : '↑/↓: SELECT TASK · PAGEUP/PAGEDOWN: SCROLL · ESC / C: CONSOLE'
+      ? '↑/↓: ВЫБОР · PAGEUP/PAGEDOWN: ПРОКРУТКА · K: ЗАВЕРШИТЬ · P: ПАУЗА · R: ПЕРЕЗАПУСК · ESC / C: КОНСОЛЬ'
+      : '↑/↓: SELECT · PAGEUP/PAGEDOWN: SCROLL · K: KILL · P: PAUSE · R: RESTART · ESC / C: CONSOLE'
     ctx.fillText(this.fitText(ctx, hint, width - margin * 2), margin, footerY)
+
+    if (this.notice) {
+      ctx.textAlign = 'right'
+      ctx.fillStyle = COLORS.yellow
+      ctx.fillText(this.fitText(ctx, this.notice, width - margin * 2), width - margin, footerY)
+      ctx.textAlign = 'left'
+    }
 
     ctx.restore()
   }
 
   // ------------------------------------------------------------------ pieces
+
+  /**
+   * Apply a control verb to the selected row.
+   *
+   * Only programs can be controlled; a service row belongs to the hardware
+   * and is repaired through the maintenance UI, not from the task manager.
+   */
+  private controlSelected(verb: 'kill' | 'pause' | 'restart'): void {
+    const processes = this.robotData.getProcesses()
+    const selected = processes[this.selectedIndex]
+    if (!selected) return
+
+    if (selected.kind !== 'program') {
+      this.notice = this.language === 'ru'
+        ? `СЛУЖБА ${selected.name}: УПРАВЛЕНИЕ НЕДОСТУПНО.`
+        : `SERVICE ${selected.name}: NOT CONTROLLABLE.`
+      return
+    }
+
+    const pid = selected.pid
+    let ok = false
+    if (verb === 'kill') {
+      ok = this.robotData.killProcess(pid)
+      this.notice = ok
+        ? (this.language === 'ru' ? `ПРОЦЕСС ${pid} ЗАВЕРШЁН.` : `PROCESS ${pid} TERMINATED.`)
+        : (this.language === 'ru' ? `ПРОЦЕСС ${pid} УЖЕ ЗАВЕРШЁН.` : `PROCESS ${pid} IS ALREADY OVER.`)
+    } else if (verb === 'pause') {
+      const program = this.robotData.getProgram(pid)
+      const suspended = program?.state === 'SUSPENDED'
+      ok = suspended ? this.robotData.resumeProcess(pid) : this.robotData.suspendProcess(pid)
+      this.notice = ok
+        ? suspended
+          ? (this.language === 'ru' ? `ПРОЦЕСС ${pid} ПРОДОЛЖЕН.` : `PROCESS ${pid} RESUMED.`)
+          : (this.language === 'ru' ? `ПРОЦЕСС ${pid} ПРИОСТАНОВЛЕН.` : `PROCESS ${pid} SUSPENDED.`)
+        : (this.language === 'ru' ? `ПРОЦЕСС ${pid} НЕЛЬЗЯ ${suspended ? 'ПРОДОЛЖИТЬ' : 'ПРИОСТАНОВИТЬ'}.` : `PROCESS ${pid} CANNOT BE ${suspended ? 'RESUMED' : 'SUSPENDED'}.`)
+    } else {
+      ok = this.robotData.resetProcess(pid)
+      this.notice = ok
+        ? (this.language === 'ru' ? `ПРОЦЕСС ${pid} ПЕРЕЗАПУЩЕН.` : `PROCESS ${pid} RESTARTED.`)
+        : (this.language === 'ru' ? `ПРОЦЕСС ${pid} НЕЛЬЗЯ ПЕРЕЗАПУСТИТЬ.` : `PROCESS ${pid} CANNOT BE RESTARTED.`)
+    }
+  }
 
   private drawGauge(
     ctx: CanvasRenderingContext2D,
@@ -340,10 +409,11 @@ export class TaskManagerWindow implements GameWindow {
     ctx.fillStyle = COLORS.dim
     const headerY = rect.y + 7 + Math.ceil(lineHeight * 1.2)
     ctx.fillText('PID', baseX, headerY)
-    ctx.fillText(this.language === 'ru' ? 'СЛУЖБА' : 'SERVICE', baseX + columns.pid, headerY)
+    ctx.fillText('*', baseX + columns.pid, headerY)
+    ctx.fillText(this.language === 'ru' ? 'ИМЯ' : 'NAME', baseX + columns.pid + columns.kind, headerY)
     ctx.textAlign = 'right'
-    ctx.fillText('CPU%', baseX + columns.pid + columns.name + columns.cpu, headerY)
-    ctx.fillText(this.language === 'ru' ? 'ПАМ' : 'MEM', baseX + columns.pid + columns.name + columns.cpu + columns.mem, headerY)
+    ctx.fillText('CPU%', baseX + columns.pid + columns.kind + columns.name + columns.cpu, headerY)
+    ctx.fillText(this.language === 'ru' ? 'ПАМ' : 'MEM', baseX + columns.pid + columns.kind + columns.name + columns.cpu + columns.mem, headerY)
     ctx.fillText(this.language === 'ru' ? 'СОСТОЯНИЕ' : 'STATE', rect.x + rect.width - pad, headerY)
     ctx.textAlign = 'left'
 
@@ -382,16 +452,21 @@ export class TaskManagerWindow implements GameWindow {
       ctx.textAlign = 'left'
       ctx.fillStyle = selected ? COLORS.bright : COLORS.text
       ctx.fillText(String(process.pid).padStart(4, ' '), baseX, y + 2, columns.pid - 4)
-      ctx.fillText(this.fitText(ctx, process.name, columns.name - 6), baseX + columns.pid, y + 2, columns.name - 4)
+      // The marker tells a user program apart from a system service.
+      ctx.fillStyle = process.kind === 'program'
+        ? (selected ? COLORS.bright : COLORS.green)
+        : COLORS.dim
+      ctx.fillText(process.kind === 'program' ? '*' : '·', baseX + columns.pid, y + 2)
+      ctx.fillText(this.fitText(ctx, process.name, columns.name - 6), baseX + columns.pid + columns.kind, y + 2, columns.name - 4)
       ctx.textAlign = 'right'
       ctx.fillStyle = process.cpuPercent > 0.05 ? (selected ? COLORS.bright : COLORS.green) : COLORS.dim
-      ctx.fillText(process.cpuPercent.toFixed(1), baseX + columns.pid + columns.name + columns.cpu, y + 2)
+      ctx.fillText(process.cpuPercent.toFixed(1), baseX + columns.pid + columns.kind + columns.name + columns.cpu, y + 2)
       ctx.fillStyle = selected ? COLORS.bright : COLORS.dim
       ctx.fillText(
         process.memoryKb >= 1024
           ? `${(process.memoryKb / 1024).toFixed(1)}M`
           : `${process.memoryKb}K`,
-        baseX + columns.pid + columns.name + columns.cpu + columns.mem,
+        baseX + columns.pid + columns.kind + columns.name + columns.cpu + columns.mem,
         y + 2,
       )
       ctx.textAlign = 'right'
@@ -424,20 +499,32 @@ export class TaskManagerWindow implements GameWindow {
       )
       const component = selected.componentId ? this.robotData.getComponent(selected.componentId) : undefined
       ctx.fillStyle = component ? stateColor(processStateOf(component.status)) : COLORS.dim
-      const statusLine = selected.componentId
-        ? component
-          ? `${selected.componentId}: ${component.status} — ${this.fitText(ctx, component.fault, Math.max(40, rect.width - pad * 2 - 90))}`
-          : `${selected.componentId}: —`
-        : (this.language === 'ru' ? 'СЛУЖБА СИСТЕМЫ (БЕЗ КОМПОНЕНТА)' : 'SYSTEM SERVICE (NO COMPONENT)')
+      const statusLine = selected.kind === 'program'
+        ? this.programStatusLine(selected)
+        : selected.componentId
+          ? component
+            ? `${selected.componentId}: ${component.status} — ${this.fitText(ctx, component.fault, Math.max(40, rect.width - pad * 2 - 90))}`
+            : `${selected.componentId}: —`
+          : (this.language === 'ru' ? 'СЛУЖБА СИСТЕМЫ (БЕЗ КОМПОНЕНТА)' : 'SYSTEM SERVICE (NO COMPONENT)')
       ctx.fillText(this.fitText(ctx, statusLine, rect.width - pad * 2), rect.x + pad, detailY + 5 + lineHeight)
     }
   }
 
-  private processColumns(panelWidth: number): { pid: number; name: number; cpu: number; mem: number; state: number } {
+  /** Second detail line of a program row: where it came from and how far it got. */
+  private programStatusLine(process: RobotProcess): string {
+    const instructions = process.instructions ?? 0
+    const source = process.path ?? (this.language === 'ru' ? 'БУФЕР РЕДАКТОРА' : 'EDITOR BUFFER')
+    return this.language === 'ru'
+      ? `ПРОГРАММА · ${source} · ИНСТРУКЦИЙ: ${instructions}`
+      : `PROGRAM · ${source} · INSTRUCTIONS: ${instructions}`
+  }
+
+  private processColumns(panelWidth: number): { pid: number; kind: number; name: number; cpu: number; mem: number; state: number } {
     const compact = panelWidth < 520
     return {
       pid: compact ? 40 : 46,
-      name: compact ? Math.max(110, panelWidth * 0.34) : Math.max(150, panelWidth * 0.36),
+      kind: compact ? 12 : 16,
+      name: compact ? Math.max(110, panelWidth * 0.32) : Math.max(150, panelWidth * 0.34),
       cpu: compact ? 48 : 60,
       mem: compact ? 56 : 70,
       state: compact ? 96 : 130,

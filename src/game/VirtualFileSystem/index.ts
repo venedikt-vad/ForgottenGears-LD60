@@ -134,13 +134,24 @@ df                   занятость хранилища и квоты
 vim [путь]           открыть Vim-подобный редактор исходников
 ui                   открыть панель обслуживания
 tasks                диспетчер задач: производительность и сервисы
+ps                   таблица процессов: сервисы и запущенные программы
+run <путь>           скомпилировать .rasm и запустить его как процесс
+kill <PID>           завершить процесс
+pause <PID>          приостановить процесс
+resume <PID>         продолжить приостановленный процесс
+start                запустить программу запуска тела и получить её вердикт
 
 Рекомендуемый порядок:
 1. Прочитать отчёт POST и запустить diagnostics.
 2. Проверить источник питания и карту распределения.
 3. Не включать движение до проверки охлаждения.
 4. После каждого крупного изменения повторять diagnostics.
+5. Когда все узлы в норме — выполнить start: программа проверяет аппаратуру
+   сама и пишет код отказа в DIAG (1..5).
 
+Программы .rasm редактируются через vim и запускаются командой run <путь>.
+Запуск программы блокируется, если вычислительный узел (CPU-730) или ядро
+операционной системы (OSK-710) недоступны.
 Чтение доступно из консоли; исходники .drv/.seq можно редактировать через vim. Изменения хранятся в текущем сеансе.
 Пути считаются от текущего каталога (cd/pwd); абсолютные пути начинаются с /.
 Хранилище ограничено (файлы, каталоги, размер файла и общий объём); превышение отклоняется. Статус квот показывает df и метр в шапке.
@@ -167,13 +178,24 @@ df                   storage usage and quotas
 vim [path]           open the Vim-like source editor
 ui                   open service toolbar
 tasks                task manager: performance and services
+ps                   process table: services and running programs
+run <path>           compile a .rasm file and start it as a process
+kill <PID>           terminate a process
+pause <PID>          suspend a process
+resume <PID>         continue a suspended process
+start                run the body startup program and get its verdict
 
 Recommended order:
 1. Read the POST report and run diagnostics.
 2. Inspect the power source and distribution map.
 3. Do not enable motion before checking cooling.
 4. Run diagnostics again after each major change.
+5. Once every unit is healthy — run start: the program checks the hardware
+   itself and writes the failure code to DIAG (1..5).
 
+.rasm programs are edited with vim and started with run <path>.
+Program launch is blocked while the compute unit (CPU-730) or the operating
+system kernel (OSK-710) is unavailable.
 Source .drv/.seq files can be edited with vim; changes persist in the current game session.
 File-command paths resolve from the current directory (cd/pwd); absolute paths start with /.
 Storage is limited (files, directories, per-file size, total size); over-quota writes are refused. Run df or watch the header meter for usage.
@@ -365,6 +387,159 @@ PROC BODY_STARTUP:
     ENABLE_MOTION(LOC-630)
     ENABLE_VISION(CAM-410)
 END
+`,
+      },
+    },
+    {
+      path: '/opt/firmware/motion/body-startup.rasm',
+      content: {
+        ru: `; ============================================================
+;  RASM 1.0 - BODY STARTUP SELF-TEST
+; ============================================================
+;  The console command "start" launches this file as a real process.
+;  Every check reads a hardware port of the robot:
+;
+;    PWR     primary power source        (check 1)
+;    MEM     core memory                 (check 2)
+;    PROFILE motion command profile      (check 3)
+;    BUS     body power bus              (check 4)
+;    ACT     actuator bus                (check 5)
+;
+;  The first failed check writes its number into the DIAG latch
+;  and clears the BOOT latch. When all five checks pass, DIAG is
+;  set to 0 and BOOT to 1.
+; ============================================================
+
+        IN  R0, PWR          ; primary power source
+        CMP R0, #1
+        JNE FAIL_PWR
+        IN  R0, MEM          ; core memory
+        CMP R0, #1
+        JNE FAIL_MEM
+        IN  R0, PROFILE      ; motion command profile
+        CMP R0, #1
+        JNE FAIL_PROFILE
+        IN  R0, BUS          ; body power bus
+        CMP R0, #1
+        JNE FAIL_BUS
+        IN  R0, ACT          ; actuator bus
+        CMP R0, #1
+        JNE FAIL_ACT
+
+        MOV R1, #0           ; every check passed
+        OUT DIAG, R1
+        MOV R1, #1
+        OUT BOOT, R1
+        HALT
+
+FAIL_PWR:
+        MOV R1, #1
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_MEM:
+        MOV R1, #2
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_PROFILE:
+        MOV R1, #3
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_BUS:
+        MOV R1, #4
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_ACT:
+        MOV R1, #5
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+`,
+        en: `; ============================================================
+;  RASM 1.0 - BODY STARTUP SELF-TEST
+; ============================================================
+;  The console command "start" launches this file as a real process.
+;  Every check reads a hardware port of the robot:
+;
+;    PWR     primary power source        (check 1)
+;    MEM     core memory                 (check 2)
+;    PROFILE motion command profile      (check 3)
+;    BUS     body power bus              (check 4)
+;    ACT     actuator bus                (check 5)
+;
+;  The first failed check writes its number into the DIAG latch
+;  and clears the BOOT latch. When all five checks pass, DIAG is
+;  set to 0 and BOOT to 1.
+; ============================================================
+
+        IN  R0, PWR          ; primary power source
+        CMP R0, #1
+        JNE FAIL_PWR
+        IN  R0, MEM          ; core memory
+        CMP R0, #1
+        JNE FAIL_MEM
+        IN  R0, PROFILE      ; motion command profile
+        CMP R0, #1
+        JNE FAIL_PROFILE
+        IN  R0, BUS          ; body power bus
+        CMP R0, #1
+        JNE FAIL_BUS
+        IN  R0, ACT          ; actuator bus
+        CMP R0, #1
+        JNE FAIL_ACT
+
+        MOV R1, #0           ; every check passed
+        OUT DIAG, R1
+        MOV R1, #1
+        OUT BOOT, R1
+        HALT
+
+FAIL_PWR:
+        MOV R1, #1
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_MEM:
+        MOV R1, #2
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_PROFILE:
+        MOV R1, #3
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_BUS:
+        MOV R1, #4
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
+
+FAIL_ACT:
+        MOV R1, #5
+        OUT DIAG, R1
+        MOV R1, #0
+        OUT BOOT, R1
+        HALT
 `,
       },
     },
