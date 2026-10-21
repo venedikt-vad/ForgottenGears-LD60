@@ -669,6 +669,75 @@ Interpretation: no motion does not by itself prove that the servo drives failed.
 Verify the command profile before diagnosing the mechanics.`,
       },
     },
+    {
+      path: '/opt/firmware/motion/thermal_governor.rasm',
+      content: {
+        ru: `; ============================================================
+;  RASM 1.0 example — "thermal governor"
+; ============================================================
+;  Reads the TEMP sensor, and while the robot is cooler than
+;  80 degrees it ramps the MOTOR speed up by 10 each pass.
+;  Once the limit is reached it stops the motor and halts.
+;
+;  Try it in the RASM window (console command: rasm):
+;    F5 / R   run
+;    F8 / S   step one instruction
+;    F9       reset
+;    F10 / B  toggle a breakpoint on the current line
+; ============================================================
+
+        MOV R0, #0          ; R0 = motor speed
+        MOV R1, #80         ; R1 = temperature limit
+        MOV R2, #0x20       ; R2 = scratch address in RAM (0x20 = 32)
+
+LOOP:   IN  R3, TEMP        ; read the thermal sensor into R3
+        CMP R3, R1          ; compare temperature with the limit
+        JGE OVERHEAT        ; hot enough? stop the motor
+
+        ADD R0, #10         ; ramp the speed up by 10
+        OUT MOTOR, R0       ; send the speed to the motor
+        STORE [0x20], R0    ; remember the last speed in RAM
+        JMP LOOP            ; repeat while it is safe
+
+OVERHEAT:
+        OUT MOTOR, #0       ; cut the motor
+        LOAD R4, [0x20]     ; R4 = last speed we reached
+        HALT                ; done
+`,
+        en: `; ============================================================
+;  RASM 1.0 example — "thermal governor"
+; ============================================================
+;  Reads the TEMP sensor, and while the robot is cooler than
+;  80 degrees it ramps the MOTOR speed up by 10 each pass.
+;  Once the limit is reached it stops the motor and halts.
+;
+;  Try it in the RASM window (console command: rasm):
+;    F5 / R   run
+;    F8 / S   step one instruction
+;    F9       reset
+;    F10 / B  toggle a breakpoint on the current line
+; ============================================================
+
+        MOV R0, #0          ; R0 = motor speed
+        MOV R1, #80         ; R1 = temperature limit
+        MOV R2, #0x20       ; R2 = scratch address in RAM (0x20 = 32)
+
+LOOP:   IN  R3, TEMP        ; read the thermal sensor into R3
+        CMP R3, R1          ; compare temperature with the limit
+        JGE OVERHEAT        ; hot enough? stop the motor
+
+        ADD R0, #10         ; ramp the speed up by 10
+        OUT MOTOR, R0       ; send the speed to the motor
+        STORE [0x20], R0    ; remember the last speed in RAM
+        JMP LOOP            ; repeat while it is safe
+
+OVERHEAT:
+        OUT MOTOR, #0       ; cut the motor
+        LOAD R4, [0x20]     ; R4 = last speed we reached
+        HALT                ; done
+`,
+      },
+    },
   ]
 
   private readonly fileByPath = new Map(this.files.map((file) => [file.path, file]))

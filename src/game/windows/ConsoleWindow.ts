@@ -8,6 +8,8 @@ import type { WindowManager } from './WindowManager'
 import { VirtualFileSystem, VFS_LIMITS, formatBytes, type VirtualFileErrorCode } from '../VirtualFileSystem'
 import type { CodeEditorWindow } from './CodeEditorWindow'
 import type { RobotSystem, RuntimeStatus } from '../Game'
+import { compileProgram, isRunnable, formatDiagnostics } from '../rasm'
+import type { RasmWindow } from './RasmWindow'
 
 
 /** Commands whose argument is a filesystem path, used for Tab completion. */
@@ -874,6 +876,7 @@ export class ConsoleWindow implements GameWindow {
               '  tasks      — открыть диспетчер задач и производительности',
               '  status     — сводка состояния робота',
               '  manual     — инструкция оператора',
+              '  rasm       — открыть отладчик RASM',
               '  clear      — полностью очистить экран консоли',
               '  start      — запуск робота; при отказе выводятся блокирующие проблемы.',
               '',
@@ -890,6 +893,7 @@ export class ConsoleWindow implements GameWindow {
               '  find <слово>   — поиск по путям и содержимому',
               '  df             — лимиты и заполнение файлового хранилища',
               '  vim [путь]     — открыть редактор',
+              '  rasm check <п> — собрать .rasm и вывести диагностику',
               '',
               'ПУТИ: команды файлов работают с текущего каталога; абсолютные начинаются с /.',
               'УПРАВЛЕНИЕ: ↑/↓ — история команд; TAB — автодополнение.',
@@ -903,6 +907,7 @@ export class ConsoleWindow implements GameWindow {
               '  tasks      — open the task manager and performance screen',
               '  status     — robot status summary',
               '  manual     — operator manual',
+              '  rasm       — open the RASM debugger',
               '  clear      — clear the console screen completely',
               '  start      — start the robot; blocking faults are listed if startup is refused.',
               '',
@@ -919,6 +924,7 @@ export class ConsoleWindow implements GameWindow {
               '  find <term>  — search paths and contents',
               '  df           — storage quotas and fill levels',
               '  vim [path]   — open the editor',
+              '  rasm check <p> — assemble a .rasm file and print diagnostics',
               '',
               'PATHS: file commands resolve from the current directory; absolute paths start with /.',
               'CONTROLS: ↑/↓ — command history; TAB — autocomplete.',
@@ -936,6 +942,11 @@ export class ConsoleWindow implements GameWindow {
           : 'STARTING MAINTENANCE UI...\n')
         this.manager?.show('ui')
         return
+
+      case 'rasm': {
+        this.runRasmCommand(rawArgument)
+        return
+      }
 
       case 'status':
         this.printRobotStatus()
@@ -1346,14 +1357,62 @@ export class ConsoleWindow implements GameWindow {
     this.appendLines([ru ? `УДАЛЁН КАТАЛОГ: ${result.path}` : `DIRECTORY REMOVED: ${result.path}`, ''])
   }
 
+  /**
+   * `rasm` opens the RASM debugger; `rasm <path>` compiles a source file from
+   * the virtual filesystem and prints its diagnostics, then loads it into the
+   * window so the player can step through it immediately.
+   */
+  private runRasmCommand(argument: string): void {
+    const ru = this.language === 'ru'
+    const trimmed = argument.trim()
+    const wantsCheck = /^check\b/i.test(trimmed)
+    const pathArgument = wantsCheck ? trimmed.replace(/^check\b/i, '').trim() : trimmed
+
+    if (pathArgument) {
+      const resolved = this.fileSystem.resolvePath(this.cwd, pathArgument)
+      const lines = this.fileSystem.read(resolved, this.language)
+      if (!lines) {
+        this.appendLines([
+          ru ? `ОШИБКА: ФАЙЛ НЕ НАЙДЕН: ${resolved}` : `ERROR: FILE NOT FOUND: ${resolved}`,
+          ru ? 'СОЗДАЙТЕ ЕГО КОМАНДОЙ: touch <путь>' : 'CREATE IT WITH: touch <path>',
+          '',
+        ])
+        return
+      }
+
+      const source = lines.join('\n')
+      const program = compileProgram(source)
+      const ok = isRunnable(program)
+
+      this.appendLines([
+        ru ? `--- РАЗБОР RASM: ${resolved} ---` : `--- RASM ASSEMBLY: ${resolved} ---`,
+        ...formatDiagnostics(program.diagnostics),
+        ok
+          ? (ru
+              ? `СБОРКА OK: ${program.instructions.length} ИНСТРУКЦИЙ, ${program.labels.size} МЕТОК.`
+              : `COMPILED OK: ${program.instructions.length} INSTRUCTIONS, ${program.labels.size} LABELS.`)
+          : (ru
+              ? `СБОРКА НЕ УДАЛАСЬ: ${program.diagnostics.length} ОШИБОК — ЗАПУСК ЗАБЛОКИРОВАН.`
+              : `COMPILE FAILED: ${program.diagnostics.length} ERRORS — RUNNING IS BLOCKED.`),
+        '',
+      ])
+
+      const rasmWindow = this.manager?.get<RasmWindow>('rasm')
+      if (rasmWindow && ok) rasmWindow.loadSource(source)
+      if (ok) this.manager?.show('rasm')
+      return
+    }
+
+    this.manager?.show('rasm')
+  }
+
   private printDirectory(rawPath: string): void {
     const entries = this.fileSystem.list(rawPath || '/', this.language)
     const failed = entries[0]?.startsWith(this.language === 'ru' ? 'ОШИБКА' : 'ERROR') ?? false
     this.appendLines(failed ? entries : [...entries, '', this.storageSummaryLine(), ''])
   }
 
-  private printFile(rawPath: string): void {
-    const ru = this.language === 'ru'
+  private printFile(rawPath: string): void {    const ru = this.language === 'ru'
     if (!rawPath) {
       this.appendLines([ru ? 'ФОРМАТ: cat <путь>' : 'USAGE: cat <path>', ''])
       return

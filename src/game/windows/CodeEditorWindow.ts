@@ -2,6 +2,7 @@ import type { Input, InputKeyEvent } from '../Input'
 import { FONT_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
 import { VirtualFileSystem, formatBytes, type VirtualFileErrorCode } from '../VirtualFileSystem'
+import { compileProgram, isRunnable } from '../rasm'
 import type { GameLanguage, GameWindow } from './GameWindow'
 import { SolvePopup } from './SolvePopup'
 import type { WindowManager } from './WindowManager'
@@ -33,7 +34,7 @@ export interface CodeEditorOptions {
 const DEFAULT_FILE = '/opt/firmware/motion/оптимизатор_акселерации_1.0.18.drv'
 const INSTRUCTION_FILE = '/opt/firmware/motion/ИНСТРУКЦИЯ'
 const RESTORE_COMMAND = 'RESTORE_MOTION_PROFILE()'
-const EDITABLE_EXTENSION = /\.(drv|seq|cfg|txt|conf|asm|src|md)$/i
+const EDITABLE_EXTENSION = /\.(drv|seq|cfg|txt|conf|asm|src|md|rasm)$/i
 
 type SupplementalEditorFile = {
   path: string
@@ -1013,8 +1014,12 @@ export class CodeEditorWindow implements GameWindow {
   }
   private validateProgram(): void {
     const path = this.currentPath.toLowerCase()
+    if (path.endsWith('.rasm')) {
+      this.validateRasmProgram()
+      return
+    }
     if (!this.isRecoveryTargetFile(this.currentPath) || (!path.endsWith('.drv') && !path.endsWith('.seq'))) {
-      this.setMessage(this.language === 'ru' ? 'ПРОВЕРКА ДОСТУПНА ДЛЯ ФАЙЛОВ .DRV И .SEQ' : 'CHECK IS AVAILABLE FOR .DRV AND .SEQ FILES', true)
+      this.setMessage(this.language === 'ru' ? 'ПРОВЕРКА ДОСТУПНА ДЛЯ ФАЙЛОВ .DRV, .SEQ И .RASM' : 'CHECK IS AVAILABLE FOR .DRV, .SEQ AND .RASM FILES', true)
       return
     }
 
@@ -1036,6 +1041,46 @@ export class CodeEditorWindow implements GameWindow {
       this.onValidate?.(this.currentPath, false)
     }
   }
+
+  /**
+   * Compile a `.rasm` buffer through the RASM language core and surface the
+   * diagnostics in the editor's check strip. A compile error blocks running, so
+   * a program only passes when `isRunnable` is true.
+   */
+  private validateRasmProgram(): void {
+    const text = this.buffer.join('\n')
+    const program = compileProgram(text)
+    if (isRunnable(program)) {
+      this.checkedBufferText = text
+      this.checkResult = {
+        ok: true,
+        detail: '',
+        text,
+      }
+      playSfx('correct')
+      this.setMessage(this.language === 'ru'
+        ? `СБОРКА OK: ${program.instructions.length} ИНСТРУКЦИЙ, ${program.labels.size} МЕТОК.`
+        : `COMPILED OK: ${program.instructions.length} INSTRUCTIONS, ${program.labels.size} LABELS.`)
+      this.onValidate?.(this.currentPath, true)
+      return
+    }
+
+    const first = program.diagnostics[0]
+    this.checkedBufferText = null
+    this.checkResult = {
+      ok: false,
+      detail: first
+        ? `L${first.line}${first.column ? `:${first.column}` : ''}  ${first.code}  ${first.message}`
+        : (this.language === 'ru' ? 'ОШИБКА СБОРКИ RASM' : 'RASM COMPILE ERROR'),
+      text,
+    }
+    playSfx('incorrect')
+    this.setMessage(this.language === 'ru'
+      ? `ОШИБКА СБОРКИ: ${program.diagnostics.length} — СТРОКА ${first?.line ?? '?'}: ${first?.message ?? ''}`
+      : `COMPILE FAILED: ${program.diagnostics.length} — LINE ${first?.line ?? '?'}: ${first?.message ?? ''}`, true)
+    this.onValidate?.(this.currentPath, false)
+  }
+
   private saveFile(): boolean {
     if (!this.currentPath) return false
     if (this.isInstructionFile(this.currentPath) || this.isSupplementalFile(this.currentPath) || !EDITABLE_EXTENSION.test(this.currentPath)) {

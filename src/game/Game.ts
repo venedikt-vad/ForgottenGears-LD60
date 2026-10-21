@@ -11,12 +11,14 @@ import { UiWindow } from './windows/UiWindow'
 import { TaskManagerWindow } from './windows/TaskManagerWindow'
 import { WindowManager } from './windows/WindowManager'
 import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
+import { RasmWindow } from './windows/RasmWindow'
 import { WindowMaze } from './windows/mazeComponents/WindowMaze'
 import { VictoryWindow } from './windows/VictoryWindow'
 
 import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem } from './VirtualFileSystem'
 import { RobotData } from './RobotData'
+import { DemoScenario, DEMO_PROGRAM_PATH } from './rasm/scenario'
 
 export type RuntimeStatus = 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'CRITICAL' | 'MISSING' | 'LOCKED'
 export type RuntimeCategory = 'POWER' | 'COMPUTE' | 'OS' | 'SENSORS' | 'MOTION' | 'THERMAL' | 'SAFETY' | 'NETWORK' | 'BODY' | 'SYSTEM'
@@ -436,6 +438,19 @@ export class Game {
       onSolved: () => this.robotSystem.completeBusBypassPuzzle(),
     })
 
+    // RASM demo level: a temperature sensor and a motor on a generic device bus.
+    // Compiling a valid program counts as restoring the motion profile, the same
+    // way the editor's `:check` command does, so both routes feed the progression.
+    const rasmScenario = new DemoScenario()
+    const rasmWindow = new RasmWindow({
+      scenario: rasmScenario,
+      onProgramValidated: () => this.robotSystem.completeMotionProfile(),
+    })
+    // Seed the debugger with the shipped sample so the player has a working
+    // program to step through, and a known-good reference when editing.
+    const sampleSource = fileSystem.read(DEMO_PROGRAM_PATH, 'en')
+    if (sampleSource) rasmWindow.loadSource(sampleSource.join('\n'))
+
     const languageWindow = new LanguageSelectWindow((language: GameLanguage) => {
       consoleWindow.setLanguage(language)
       codeEditor.setLanguage(language)
@@ -443,6 +458,7 @@ export class Game {
       taskManagerWindow.setLanguage(language)
       victoryWindow.setLanguage(language)
       maze.setLanguage(language)
+      rasmWindow.setLanguage(language)
       this.windows.show('console')
     })
 
@@ -456,6 +472,7 @@ export class Game {
       .register(memoryCore)
       .register(powerDistribution)
       .register(maze)
+      .register(rasmWindow)
       .register(victoryWindow)
 
     // Start at the language picker, then continue to the recovery console.

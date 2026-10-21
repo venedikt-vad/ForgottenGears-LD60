@@ -14,6 +14,7 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 - `windows/TaskManagerWindow.ts` — green-BIOS task manager: performance gauges (CPU load, frame time, memory, temperature, power draw, storage), a scrollable process table tied to real components, load sparklines, and the storage panel.
 - `RobotData.ts` — single read-model in front of `RobotSystem` + `VirtualFileSystem`. Interface windows ask it for components, performance samples, parameters, processes, and storage instead of reaching into raw state.
 - `VirtualFileSystem/` — in-memory file store shared by the console and the editor, with hard quotas (see below).
+- `rasm/` — the RASM 1.0 language core (parser, compiler, device bus, virtual processor, debugger). UI-independent; see `rasm/RASM.md` for the language reference. The in-game debugger lives in `windows/RasmWindow.ts`.
 
 ## Start sequence
 
@@ -39,6 +40,7 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 - `tasks` — open the task manager (also reachable from the utility with `T`)
 - `editor` — open the Vim-style code editor
 - `manual` — print the manual
+- `rasm` — open the RASM debugger; `rasm check <path>` compiles a `.rasm` file and prints diagnostics
 - `clear` — append a screen-clear marker while retaining history
 - `reboot` — rerun BIOS diagnostics while retaining history
 
