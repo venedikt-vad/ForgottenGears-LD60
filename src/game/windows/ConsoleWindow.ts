@@ -930,7 +930,7 @@ export class ConsoleWindow implements GameWindow {
     return [
       'help', 'components', 'ui', 'status', 'vim', 'manual', 'clear', 'start',
       'ls', 'cd', 'pwd', 'cat', 'touch', 'rm', 'mv', 'mkdir', 'rmdir', 'find', 'df', 'tasks',
-      'ps', 'run', 'kill', 'pause', 'resume',
+      'ps', 'run', 'kill', 'pause', 'resume', 'rasm',
     ]
   }
 
@@ -981,6 +981,8 @@ export class ConsoleWindow implements GameWindow {
               '  df             — лимиты и заполнение файлового хранилища',
               '  vim [путь]     — открыть редактор',
               '  rasm check <п> — собрать .rasm и вывести диагностику',
+              '  Справочник RASM: /usr/share/docs/rasm.txt (cat или vim).',
+              '  cat /usr/share/docs/rasm.txt — справочник по языку RASM 1.0.',
               '',
               'ПУТИ: команды файлов работают с текущего каталога; абсолютные начинаются с /.',
               'УПРАВЛЕНИЕ: ↑/↓ — история команд; ←/→, Home/End — курсор в строке;',
@@ -1020,6 +1022,8 @@ export class ConsoleWindow implements GameWindow {
               '  df           — storage quotas and fill levels',
               '  vim [path]   — open the editor',
               '  rasm check <p> — assemble a .rasm file and print diagnostics',
+              '  RASM reference: /usr/share/docs/rasm.txt (cat or vim).',
+              '  cat /usr/share/docs/rasm.txt — RASM 1.0 language reference.',
               '',
               'PATHS: file commands resolve from the current directory; absolute paths start with /.',
               'CONTROLS: ↑/↓ — command history; ←/→, Home/End — cursor in the line;',
@@ -2575,6 +2579,7 @@ export class ConsoleWindow implements GameWindow {
         'ПРОЦЕССЫ:',
         '10. ps — таблица процессов робота: сервисы и запущенные программы.',
         '11. run <путь> — скомпилировать .rasm из хранилища и запустить как процесс.',
+        '    Справочник по языку RASM: /usr/share/docs/rasm.txt (cat или vim).',
         '12. kill <PID> — завершить процесс.',
         '13. pause <PID> — приостановить процесс (состояние сохраняется).',
         '14. resume <PID> — продолжить приостановленный процесс.',
@@ -2617,6 +2622,7 @@ export class ConsoleWindow implements GameWindow {
       'PROCESSES:',
       '10. ps — process table: robot services and running programs.',
       '11. run <path> — compile a stored .rasm file and start it as a process.',
+      '    RASM language reference: /usr/share/docs/rasm.txt (cat or vim).',
       '12. kill <PID> — terminate a process.',
       '13. pause <PID> — suspend a process (its state is kept).',
       '14. resume <PID> — continue a suspended process.',

@@ -185,9 +185,23 @@ flag, device values and diagnostics.
 | `F9` / `G` | Reset the machine and the level. |
 | `F10` / `B` | Toggle a breakpoint on the current source line. |
 | `C` | Recompile and report. |
+| `M` | Switch between the demo test bench and the robot's real hardware. |
 | `Tab` | Switch between the source and machine panes. |
 | `↑` / `↓` | Move the source cursor. |
+| `PgUp` / `PgDn` | Move the source cursor by one page. |
 | `Esc` / `Q` | Leave the window. |
+
+The same language reference is shipped inside the robot filesystem, so it is
+available during the game without the repository:
+
+```text
+cat /usr/share/docs/rasm.txt
+vim /usr/share/docs/rasm.txt
+```
+
+The editor's `:help` panel lists its commands and points at that file;
+`:help rasm` opens it directly. The console `help` and `manual` commands also
+print the path.
 
 From the console you can also check a file without opening the window:
 

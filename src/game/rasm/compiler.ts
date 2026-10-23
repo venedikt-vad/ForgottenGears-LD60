@@ -127,7 +127,7 @@ export function compileProgram(source: string): CompiledProgram {
     if (!isOpcode(mnemonic)) {
       diagnostics.push(makeDiagnostic(
         'UNKNOWN_INSTRUCTION',
-        `Unknown instruction "${line.mnemonic || mnemonic}". Type "help" in the RASM window for the instruction set.`,
+        `Unknown instruction "${line.mnemonic || mnemonic}". See /usr/share/docs/rasm.txt for the instruction set.`,
         'compile',
         line.line,
         null,

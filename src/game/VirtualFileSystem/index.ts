@@ -55,6 +55,9 @@ export const VFS_LIMITS = {
   maxDirectories: 32,
 } as const
 
+/** Shipped RASM 1.0 language reference, readable with `cat` and `vim`. */
+export const RASM_DOC_PATH = '/usr/share/docs/rasm.txt'
+
 /** UTF-8 size of a string without allocating an encoder buffer. */
 export function byteLength(text: string): number {
   let bytes = 0
@@ -150,6 +153,7 @@ start                запустить программу запуска тел
    сама и пишет код отказа в DIAG (1..5).
 
 Программы .rasm редактируются через vim и запускаются командой run <путь>.
+Справочник по языку RASM: /usr/share/docs/rasm.txt (cat или vim).
 Запуск программы блокируется, если вычислительный узел (CPU-730) или ядро
 операционной системы (OSK-710) недоступны.
 Чтение доступно из консоли; исходники .drv/.seq можно редактировать через vim. Изменения хранятся в текущем сеансе.
@@ -194,6 +198,7 @@ Recommended order:
    itself and writes the failure code to DIAG (1..5).
 
 .rasm programs are edited with vim and started with run <path>.
+RASM language reference: /usr/share/docs/rasm.txt (cat or vim).
 Program launch is blocked while the compute unit (CPU-730) or the operating
 system kernel (OSK-710) is unavailable.
 Source .drv/.seq files can be edited with vim; changes persist in the current game session.
@@ -748,6 +753,196 @@ This profile is intended for safe initialization after repair.
 Safety rule: steps 4 and 3 must pass before step 8.
 The profile must not bypass hardware interlocks and cannot restore physically
 missing assemblies; those must be detected separately.`,
+      },
+    },
+    {
+      path: RASM_DOC_PATH,
+      content: {
+        ru: `RASM 1.0 — СПРАВОЧНИК ПО ЯЗЫКУ
+=============================
+RASM (Robot Assembly) — язык программирования роботов Forgotten Gears.
+Регистр букв не важен. Комментарий начинается с ";".
+Одна инструкция на строку; операнды разделяются запятой: MOV R0, #5.
+
+ИСХОДНИК
+  START:  MOV R0, #1    ; метка и инструкция
+  DONE:                 ; метка на отдельной строке
+          HALT
+  A: B: HALT            ; несколько меток
+  Числа: 80 или 0x50. Отрицательных чисел нет.
+
+МАШИНА
+  R0..R7         8 регистров по 16 бит (0..65535)
+  RAM            256 ячеек [0x00..0xFF], по 16 бит
+  PC             номер текущей инструкции
+  Флаг CMP       =, < или >; сбрасывается при сбросе машины
+  Вся арифметика выполняется по модулю 65536.
+
+ОПЕРАНДЫ
+  R3          регистр
+  #80 #0x50   непосредственное значение
+  [0x20]      ячейка RAM
+  OVERHEAT    метка перехода
+  TEMP MOTOR  имя порта устройства
+
+ИНСТРУКЦИИ
+  NOP                ничего, один такт
+  MOV dst, src       dst = src
+  LOAD dst, [addr]   dst = RAM[addr]
+  STORE [addr], src  RAM[addr] = src
+  ADD dst, src       dst = (dst + src) mod 65536
+  SUB dst, src       dst = (dst - src) mod 65536
+  CMP a, b           сравнить a и b, задать флаг
+  JMP label          безусловный переход
+  JE label           переход, если равно
+  JNE label          переход, если не равно
+  JGT label          переход, если больше
+  JGE label          переход, если больше или равно
+  JLT label          переход, если меньше
+  JLE label          переход, если меньше или равно
+  IN dst, PORT       прочитать значение порта в регистр
+  OUT PORT, src      записать значение в порт
+  HALT               остановить программу (нормальное завершение)
+  src — регистр или #число. Условный переход требует CMP,
+  иначе ошибка COMPARE_NOT_SET.
+
+МЕТКИ
+  Имя: [A-Za-z_][A-Za-z0-9_]*, затем ":".
+  Метка указывает на индекс инструкции, а не на строку.
+  Повтор метки — DUPLICATE_LABEL; переход без метки — UNKNOWN_LABEL.
+
+УСТРОЙСТВА
+  TEMP   только чтение: температура в градусах Цельсия.
+  MOTOR  чтение/запись: 0 — стоп, 1..1000 — скорость.
+  Порты задаются уровнем; неподключённый порт даёт
+  DEVICE_READ_ERROR или DEVICE_WRITE_ERROR.
+
+ВЫПОЛНЕНИЕ
+  Одна инструкция за шаг. Запуск останавливается на HALT,
+  ошибке, конце программы или исчерпании бюджета
+  (STEP_BUDGET_EXCEEDED). Выход за конец программы — норма.
+  Ошибки компиляции блокируют запуск.
+
+ОШИБКИ
+  UNKNOWN_INSTRUCTION BAD_ARGUMENT_COUNT BAD_OPERAND BAD_NUMBER
+  BAD_REGISTER BAD_ADDRESS TRAILING_TEXT EMPTY_OPERAND
+  DUPLICATE_LABEL UNKNOWN_LABEL INVALID_LABEL
+  UNKNOWN_DEVICE DEVICE_READ_ERROR DEVICE_WRITE_ERROR
+  COMPARE_NOT_SET INVALID_RAM_ACCESS PROCESSOR_HALTED
+  STEP_BUDGET_EXCEEDED PROGRAM_NOT_LOADED
+
+ПРИМЕР: ТЕРМОСТАТ
+  MOV R0, #0
+  MOV R1, #80
+LOOP: IN R3, TEMP
+  CMP R3, R1
+  JGE OVERHEAT
+  ADD R0, #10
+  OUT MOTOR, R0
+  JMP LOOP
+OVERHEAT:
+  OUT MOTOR, #0
+  HALT
+
+ОТЛАДЧИК RASM (консоль: rasm)
+  F5/R запуск, F8/S шаг, F9/G сброс, F10/B точка останова,
+  C сборка, M режим DEMO/ROBOT, TAB панель, ESC выход.
+  Проверка файла: rasm check /путь/файл.rasm
+  Редактор: :check собирает, :run запускает .rasm.
+`,
+        en: `RASM 1.0 — LANGUAGE REFERENCE
+=============================
+RASM (Robot Assembly) is the robot programming language of Forgotten Gears.
+Mnemonics, registers, labels and devices are case-insensitive.
+One instruction per line; operands are comma-separated: MOV R0, #5.
+A semicolon starts a comment.
+
+SOURCE
+  START:  MOV R0, #1    ; label and instruction
+  DONE:                 ; label on its own line
+          HALT
+  A: B: HALT            ; several labels
+  Numbers are decimal (80) or hexadecimal (0x50). No negative values.
+
+MACHINE
+  R0..R7         8 general registers, 16-bit (0..65535)
+  RAM            256 cells [0x00..0xFF], 16 bits each
+  PC             current instruction index
+  CMP flag       =, < or >; cleared when the machine is reset
+  All arithmetic wraps modulo 65536.
+
+OPERANDS
+  R3          register
+  #80 #0x50   immediate value
+  [0x20]      RAM cell
+  OVERHEAT    jump label
+  TEMP MOTOR  device port name
+
+INSTRUCTIONS
+  NOP                do nothing for one tick
+  MOV dst, src       dst = src
+  LOAD dst, [addr]   dst = RAM[addr]
+  STORE [addr], src  RAM[addr] = src
+  ADD dst, src       dst = (dst + src) mod 65536
+  SUB dst, src       dst = (dst - src) mod 65536
+  CMP a, b           compare a and b, set the flag
+  JMP label          unconditional jump
+  JE label           jump if equal
+  JNE label          jump if not equal
+  JGT label          jump if greater
+  JGE label          jump if greater or equal
+  JLT label          jump if smaller
+  JLE label          jump if smaller or equal
+  IN dst, PORT       read a port into a register
+  OUT PORT, src      write a value to a port
+  HALT               stop the program (normal end)
+  src is a register or #number. A conditional jump requires CMP,
+  otherwise it raises COMPARE_NOT_SET.
+
+LABELS
+  Name: [A-Za-z_][A-Za-z0-9_]*, followed by ":".
+  A label points to an instruction index, not a source line.
+  A repeated label is DUPLICATE_LABEL; a missing one is UNKNOWN_LABEL.
+
+DEVICES
+  TEMP  read only: temperature in degrees Celsius.
+  MOTOR read/write: 0 = stop, 1..1000 = speed.
+  Port names are level-defined. An unconnected port raises
+  DEVICE_READ_ERROR or DEVICE_WRITE_ERROR.
+
+EXECUTION
+  One instruction per step. A run stops at HALT, an error,
+  the end of the program or the instruction budget
+  (STEP_BUDGET_EXCEEDED). Running past the end is normal.
+  Compile errors prevent running.
+
+ERRORS
+  UNKNOWN_INSTRUCTION BAD_ARGUMENT_COUNT BAD_OPERAND BAD_NUMBER
+  BAD_REGISTER BAD_ADDRESS TRAILING_TEXT EMPTY_OPERAND
+  DUPLICATE_LABEL UNKNOWN_LABEL INVALID_LABEL
+  UNKNOWN_DEVICE DEVICE_READ_ERROR DEVICE_WRITE_ERROR
+  COMPARE_NOT_SET INVALID_RAM_ACCESS PROCESSOR_HALTED
+  STEP_BUDGET_EXCEEDED PROGRAM_NOT_LOADED
+
+EXAMPLE: THERMAL GOVERNOR
+  MOV R0, #0
+  MOV R1, #80
+LOOP: IN R3, TEMP
+  CMP R3, R1
+  JGE OVERHEAT
+  ADD R0, #10
+  OUT MOTOR, R0
+  JMP LOOP
+OVERHEAT:
+  OUT MOTOR, #0
+  HALT
+
+RASM DEBUGGER (console: rasm)
+  F5/R run, F8/S step, F9/G reset, F10/B breakpoint,
+  C compile, M DEMO/ROBOT mode, TAB pane, ESC exit.
+  Check a file: rasm check /path/file.rasm
+  Editor: :check compiles, :run starts a .rasm file.
+`,
       },
     },
     {

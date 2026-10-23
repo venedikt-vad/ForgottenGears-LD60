@@ -138,6 +138,11 @@ file.
 
 Press **C** or **Escape** to return to the maintenance UI at any time.
 
+The full **RASM 1.0** language reference is part of the robot filesystem. Read it
+from the console with `cat /usr/share/docs/rasm.txt`, or open it in the editor
+with `vim /usr/share/docs/rasm.txt`. The editor's `:help` panel lists the
+commands and points at the same file; `:help rasm` opens it directly.
+
 ---
 
 ## Step 6 — Actuator Control Bus / Maze (ACT-610)
@@ -193,6 +198,7 @@ victory screen appears.
 | `ui` | Open the maintenance utility |
 | `tasks` | Open the task manager (performance, processes, storage) |
 | `vim` | Open the motion-profile editor |
+| `rasm` | Open the RASM debugger; `rasm check <path>` compiles a `.rasm` file |
 | `manual` | Print the operator manual |
 | `clear` | Clear the console screen |
 | `start` | Attempt to start the robot |
@@ -206,6 +212,7 @@ The console also doubles as a small shell over the robot's in-memory storage
 | --- | --- |
 | `ls [path]` | List a directory |
 | `cat <file>` | Print a file |
+| `cat /usr/share/docs/rasm.txt` | RASM 1.0 language reference |
 | `touch <path>` | Create an empty file |
 | `rm <path>` | Delete a file you created (shipped files are protected) |
 | `mv <from> <to>` | Rename or move a file |

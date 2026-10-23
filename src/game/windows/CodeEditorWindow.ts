@@ -1,7 +1,7 @@
 import type { Input, InputKeyEvent } from '../Input'
 import { FONT_FAMILY } from '../fonts'
 import { playSfx } from '../sfx'
-import { VirtualFileSystem, formatBytes, type VirtualFileErrorCode } from '../VirtualFileSystem'
+import { VirtualFileSystem, formatBytes, RASM_DOC_PATH, type VirtualFileErrorCode } from '../VirtualFileSystem'
 import { compileProgram, isRunnable } from '../rasm'
 import { STARTUP_PROGRAM_PATH } from '../runtime/constants'
 import type { GameLanguage, GameWindow } from './GameWindow'
@@ -224,6 +224,7 @@ export class CodeEditorWindow implements GameWindow {
   // file is opened. `text` is the buffer that was checked, used to flag edits.
   private checkResult: { ok: boolean; detail: string; text: string } | null = null
   private showLineNumbers = true
+  private helpVisible = false
   private blinkClock = 0
   private message = 'NORMAL  |  :help — справка по клавишам'
   private messageIsError = false
@@ -658,6 +659,24 @@ export class CodeEditorWindow implements GameWindow {
           { title: '2. INPUT', detail: 'Press i and type one line: RESTORE_MOTION_PROFILE()' },
           { title: 'DONE', detail: 'Input becomes uppercase automatically. The command is saved; then press C or ESC to return to the maintenance UI. No :check or :w is needed.' },
         ]
+    // `:help` / `?` / F1 switch this one large panel from the walkthrough to the
+    // command reference, so the same space explains editing and `.rasm` work.
+    const helpInstructions = this.language === 'ru'
+      ? [
+          { title: 'КОМАНДЫ', detail: ':w :wq :q :q! — сохранить, выйти; :e <путь> / :e! <путь> — открыть; :new <путь> — создать.' },
+          { title: 'РАЗБОР', detail: ':check — собрать .rasm; :run — запустить .rasm как процесс.' },
+          { title: 'КЛАВИШИ', detail: 'i — ввод, ESC — норма; стрелки или h j k l — движение; dd — удалить строку; u — отмена; / — поиск; : — команда.' },
+          { title: 'RASM', detail: `Справочник по языку: ${RASM_DOC_PATH} — откройте через :e ${RASM_DOC_PATH}, консольный cat или :help rasm.` },
+          { title: 'ЗАКРЫТЬ', detail: '? , F1 или :help возвращают исходную подсказку.' },
+        ]
+      : [
+          { title: 'COMMANDS', detail: ':w :wq :q :q! — save, quit; :e <path> / :e! <path> — open; :new <path> — create.' },
+          { title: 'BUILD', detail: ':check — compile a .rasm buffer; :run — start a .rasm file as a process.' },
+          { title: 'KEYS', detail: 'i — insert, ESC — normal; arrows or h j k l — move; dd — delete line; u — undo; / — search; : — command.' },
+          { title: 'RASM', detail: `Language reference: ${RASM_DOC_PATH} — open it with :e ${RASM_DOC_PATH}, the console cat, or :help rasm.` },
+          { title: 'CLOSE', detail: '? , F1 or :help brings back the walkthrough.' },
+        ]
+    const activeInstructions = this.helpVisible ? helpInstructions : instructions
     // Wrap each help paragraph against the full width of the one large panel.
     // Keep a modest indent on continuation lines so the category labels remain clear.
     const wrapWords = (text: string, maxWidth: number): string[] => {
@@ -682,7 +701,7 @@ export class CodeEditorWindow implements GameWindow {
     const continuationIndent = Math.min(16, innerW * 0.04)
     let helpY = helpTop
     ctx.font = tinyFont
-    for (const item of instructions) {
+    for (const item of activeInstructions) {
       if (helpY + helpLineHeight > helpBottom) break
       const label = `${item.title}: `
       const labelWidth = ctx.measureText(label).width
@@ -807,6 +826,11 @@ export class CodeEditorWindow implements GameWindow {
     return key
   }
   private handleNormalKey(key: string): void {
+    if (this.helpVisible && key === 'Escape') {
+      this.helpVisible = false
+      this.setMessage('-- NORMAL --')
+      return
+    }
     if (this.activePane === 'files') {
       if (key === 'ArrowUp' || key.toLowerCase() === 'k') this.moveFileSelection(-1)
       else if (key === 'ArrowDown' || key.toLowerCase() === 'j') this.moveFileSelection(1)
@@ -866,6 +890,7 @@ export class CodeEditorWindow implements GameWindow {
       case '/': this.mode = 'SEARCH'; this.commandLine = ''; this.setMessage(this.language === 'ru' ? 'ПОИСК: ВВЕДИТЕ ТЕКСТ И ENTER' : 'SEARCH: TYPE TEXT AND ENTER'); break
       case ':': this.startCommandMode(); break
       case '?': this.showHelp(); break
+      case 'F1': this.showHelp(); break
       default:
         if (key.length === 1) this.setMessage(this.language === 'ru' ? `NORMAL: НЕИЗВЕСТНАЯ КОМАНДА ${key}` : `NORMAL: UNKNOWN COMMAND ${key}`, true)
     }
@@ -1002,7 +1027,7 @@ export class CodeEditorWindow implements GameWindow {
         break
       case 'check': this.validateProgram(); break
       case 'run': this.runBuffer(); break
-      case 'help': this.showHelp(); break
+      case 'help': this.showHelp(argument); break
       case 'files': this.activePane = 'files'; this.setMessage(this.language === 'ru' ? 'ПАНЕЛЬ ФАЙЛОВ: ↑/↓, ENTER' : 'FILE PANE: ↑/↓, ENTER'); break
       default: this.setMessage(this.language === 'ru' ? `НЕИЗВЕСТНАЯ КОМАНДА :${command}` : `UNKNOWN COMMAND :${command}`, true)
     }
@@ -1176,6 +1201,7 @@ export class CodeEditorWindow implements GameWindow {
     this.undoStack = []
     this.checkedBufferText = null
     this.checkResult = null
+    this.helpVisible = false
     const index = this.files.findIndex((entry) => entry.toLowerCase() === path.toLowerCase())
     if (index >= 0) this.selectedFileIndex = index
     this.setMessage(this.language === 'ru' ? `ОТКРЫТ: ${this.basename(path).toLocaleUpperCase('ru-RU')}` : `OPENED: ${this.basename(path).toUpperCase()}`)
@@ -1498,13 +1524,20 @@ export class CodeEditorWindow implements GameWindow {
     this.mode = 'COMMAND'
     this.commandLine = ''
     this.setMessage(this.language === 'ru'
-      ? 'КОМАНДА: :w :q :wq :e <путь> :new <путь> :check :run :help'
-      : 'COMMAND: :w :q :wq :e <path> :new <path> :check :run :help')
+      ? 'КОМАНДА: :w :q :wq :e <путь> :new <путь> :check :run :help :help rasm'
+      : 'COMMAND: :w :q :wq :e <path> :new <path> :check :run :help :help rasm')
   }
-  private showHelp(): void {
+  private showHelp(argument = ''): void {
+    const arg = argument.trim().toLowerCase()
+    if (arg === 'rasm' || arg === 'asm') {
+      this.helpVisible = false
+      this.openFile(RASM_DOC_PATH)
+      return
+    }
+    this.helpVisible = !this.helpVisible
     this.setMessage(this.language === 'ru'
-      ? 'ПРОХОЖДЕНИЕ: ↓, Enter, i, затем RESTORE_MOTION_PROFILE() — сохранение автоматическое; затем C или ESC — выход. :run — запустить .rasm как процесс.'
-      : 'RECOVERY: Down, Enter, i, then RESTORE_MOTION_PROFILE() — save is automatic; then press C or ESC to return. :run — start a .rasm file as a process.')
+      ? 'КОМАНДЫ: :w :wq :q :q! :e <путь> :new <путь> :check :run :help [rasm]'
+      : 'COMMANDS: :w :wq :q :q! :e <path> :new <path> :check :run :help [rasm]')
   }
   private exitEditor(): void {
     this.mode = 'NORMAL'

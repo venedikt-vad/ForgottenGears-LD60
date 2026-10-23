@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { RobotDeviceBus } from '../src/game/runtime/RobotDeviceBus'
 import { RobotKernel } from '../src/game/runtime/RobotKernel'
 import { STARTUP_PROGRAM_PATH, startupCheck } from '../src/game/runtime/constants'
+import { VirtualFileSystem } from '../src/game/VirtualFileSystem'
 import type { RobotSystem, RuntimeComponent } from '../src/game/Game'
 
 function makeComponent(status: RuntimeComponent['status']): RuntimeComponent {
@@ -70,41 +71,11 @@ class TestSystem implements RobotSystem {
   log(): void {}
 }
 
-const STARTUP_SOURCE = `; body startup
-        MOV R0, PWR
-        CMP R0, #1
-        JNE FAIL1
-        MOV R0, MEM
-        CMP R0, #1
-        JNE FAIL2
-        MOV R0, PROFILE
-        CMP R0, #1
-        JNE FAIL3
-        MOV R0, BUS
-        CMP R0, #1
-        JNE FAIL4
-        MOV R0, ACT
-        CMP R0, #1
-        JNE FAIL5
-        OUT DIAG, #0
-        OUT BOOT, #1
-        HALT
-FAIL1:  OUT DIAG, #1
-        OUT BOOT, #0
-        HALT
-FAIL2:  OUT DIAG, #2
-        OUT BOOT, #0
-        HALT
-FAIL3:  OUT DIAG, #3
-        OUT BOOT, #0
-        HALT
-FAIL4:  OUT DIAG, #4
-        OUT BOOT, #0
-        HALT
-FAIL5:  OUT DIAG, #5
-        OUT BOOT, #0
-        HALT
-`
+// Run the shipped firmware itself, not a hand-written copy: if the startup
+// program and the kernel ever drift apart, this test fails on the real file.
+const STARTUP_SOURCE = new VirtualFileSystem()
+  .read(STARTUP_PROGRAM_PATH, 'ru')
+  ?.join('\n') ?? ''
 
 function makeBus(system: TestSystem) {
   return new RobotDeviceBus(system, { temperature: () => 40, batteryPercent: () => 80 })
@@ -146,7 +117,6 @@ test('startup program writes DIAG 1 when power is missing', () => {
   const bus = makeBus(system)
   const kernel = new RobotKernel({ system, bus })
   const result = kernel.launch(STARTUP_SOURCE, { path: STARTUP_PROGRAM_PATH })
-  console.log('DEBUG1', result.ok, result.code, result.message)
   assert.equal(result.ok, true)
   runToEnd(kernel)
   assert.equal(bus.getLatch('DIAG'), 1)

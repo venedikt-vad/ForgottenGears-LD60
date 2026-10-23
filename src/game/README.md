@@ -41,6 +41,7 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 - `editor` — open the Vim-style code editor
 - `manual` — print the manual
 - `rasm` — open the RASM debugger; `rasm check <path>` compiles a `.rasm` file and prints diagnostics
+- `cat /usr/share/docs/rasm.txt` — read the RASM 1.0 language reference from the robot filesystem (also opens in `vim`)
 - `clear` — append a screen-clear marker while retaining history
 - `reboot` — rerun BIOS diagnostics while retaining history
 
