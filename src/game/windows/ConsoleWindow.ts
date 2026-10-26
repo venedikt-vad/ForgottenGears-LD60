@@ -15,7 +15,7 @@ import { STARTUP_PROGRAM_PATH, startupCheck } from '../runtime/constants'
 
 
 /** Commands whose argument is a filesystem path, used for Tab completion. */
-const PATH_COMMANDS = new Set(['vim', 'ls', 'cat', 'touch', 'rm', 'mv', 'cd', 'mkdir', 'rmdir'])
+const PATH_COMMANDS = new Set(['vim', 'ls', 'cat', 'touch', 'rm', 'mv', 'cd', 'mkdir', 'rmdir', 'run'])
 
 /** Commands whose path argument is a directory, so completion offers folders only. */
 const DIRECTORY_ONLY_COMMANDS = new Set(['cd', 'mkdir', 'rmdir'])
@@ -898,13 +898,48 @@ export class ConsoleWindow implements GameWindow {
       }
     }
 
+    // `rasm` takes an optional `check` subcommand followed by a path:
+    // `rasm check /var/busy.rasm` or `rasm /var/busy.rasm`.
+    if (normalizedCommand === 'rasm') return this.completeRasmArguments(enteredCommand, rest)
+
     if (rest.trim().length > 0) return []
 
     const prefix = enteredCommand.toLowerCase()
-    const leadingWhitespace = input.slice(0, input.length - enteredCommand.length)
+    // Preserve leading whitespace only; the command itself may be followed by
+    // a trailing space, which must not leak into the replacement.
+    const leadingWhitespace = /^\s*/.exec(rawInput)?.[0] ?? ''
     return this.getCommandNames()
       .filter((name) => name.startsWith(prefix))
       .map((name) => `${leadingWhitespace}${name}`)
+  }
+
+  /** Autocomplete `rasm [check] <path>`: the subcommand first, then a VFS path. */
+  private completeRasmArguments(command: string, rest: string): string[] {
+    const endsWithSpace = /\s$/.test(rest)
+    const tokens = rest.trim().split(/\s+/).filter(Boolean)
+
+    // No subcommand yet: offer `check` (the common way to assemble a file).
+    if (tokens.length === 0) return endsWithSpace ? [`${command} check `] : []
+
+    const first = (tokens[0] ?? '').toLowerCase()
+
+    // Still typing the first token: it can be the subcommand or a path.
+    if (tokens.length === 1 && !endsWithSpace) {
+      const prefix = tokens[0] ?? ''
+      const candidates: string[] = []
+      if ('check'.startsWith(prefix.toLowerCase())) candidates.push(`${command} check `)
+      if (prefix.toLowerCase() !== 'check') {
+        candidates.push(...this.completePath(prefix).map((path) => `${command} ${path}`))
+      }
+      return candidates
+    }
+
+    // A path follows `check` (or follows `rasm` directly).
+    const afterCheck = first === 'check' ? tokens.slice(1) : tokens
+    const prefix = endsWithSpace ? '' : (afterCheck.pop() ?? '')
+    return this.completePath(prefix).map((path) =>
+      [command, ...(first === 'check' ? ['check'] : []), ...afterCheck, path].join(' '),
+    )
   }
 
   /** Complete a typed path prefix relative to the working directory, keeping the typed form relative. */
