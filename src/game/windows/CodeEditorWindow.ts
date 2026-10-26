@@ -282,6 +282,12 @@ export class CodeEditorWindow implements GameWindow {
       return false
     }
     const normalized = path.trim().replace(/\\/g, '/').toLowerCase()
+    // A file created from the console (touch, or the editor's :new) after this
+    // window built its list would otherwise look missing. Refresh once before
+    // reporting a file that the virtual filesystem already contains.
+    if (!this.files.some((entry) => entry.toLowerCase() === normalized)) {
+      this.refreshFileList()
+    }
     const resolved = this.files.find((entry) => entry.toLowerCase() === normalized)
     if (!resolved || !this.readEditorFile(resolved)) {
       this.setMessage(
