@@ -4,10 +4,15 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 
 ## Files
 
-- `Game.ts` — window-system integration while retaining the original game loop, player movement, scene drawing, resize handling, font loading, and glow-canvas mirror. Owns the authoritative `RobotSystem` state, wires the windows, and feeds per-frame timing samples into `RobotData`.
+- `Game.ts` — window-system integration while retaining the original game loop, player movement, scene drawing, resize handling, font loading, and glow-canvas mirror. Owns the authoritative `RobotSystem` state, wires the windows, and feeds per-frame timing samples into `RobotData`. It also starts at the title screen and owns save/load, autosave, settings, and play-time tracking.
 - `Input.ts` — keyboard input with key-repeat text entry, continuous Backspace support, and mouse-wheel delta for console scrolling.
 - `windows/GameWindow.ts` and `windows/WindowManager.ts` — shared interface and state-preserving window manager.
-- `windows/LanguageSelectWindow.ts` — a tiny, centered language picker.
+- `windows/MainMenuWindow.ts` — the console-styled title screen with Continue, Settings, Authors, Exit, and the RU/EN language selector.
+- `windows/SaveSelectWindow.ts` — six-slot save browser: empty slots start a new game, occupied slots load, and deletion requires confirmation.
+- `windows/SettingsWindow.ts` — language and music/SFX volume settings.
+- `windows/ShutdownWindow.ts` — browser-safe halt screen shown by Exit; returns to the title screen.
+- `windows/menu/MenuTheme.ts` — shared console palette, fonts, rules, and panel helpers for the menu screens.
+- `save/SaveManager.ts` and `save/types.ts` — six-slot localStorage save storage, settings persistence, validation, and the save/settings data contracts.
 - `windows/ConsoleWindow.ts` — old-school BIOS/POST layout with a framed boot banner, aligned hardware and memory tables, module progress bars, an error log, animated diagnostic records (including failures and warnings), persistent transcript, scrollback, a text-based Y/N prompt, terminal commands, path autocompletion, and a storage meter in the header.
 - `windows/CodeEditorWindow.ts` — CRT/amber Vim-style editor: file panel, command mode (`:w`, `:e`, `:new`, …), and quota-aware saves into the virtual filesystem.
 - `windows/UiWindow.ts` — robot-maintenance utility panel (component registry, body schematic, power redistribution). Press `T` for the task manager.
@@ -18,10 +23,19 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 
 ## Start sequence
 
-1. A small language window appears in the center of the screen with English pre-selected. Use Up/Down (or W/S) or hover with the mouse, then click or press Enter. `1` selects English and `2` selects Russian.
-2. The BIOS console prints a long, table-formatted POST report: hardware detection, memory integrity tests, module loading, subsystem status, repeated diagnostic passes, and unresolved error codes. It automatically follows new output unless you scroll up.
-3. When diagnostics finish, type `Y` and press Enter to read the operator manual, or type `N` and press Enter to skip it. This is text input; pressing the Y/N key alone does not select an answer.
-4. In the terminal, type a command and press Enter.
+1. The console-styled title screen is the launch screen. Use Up/Down and Enter (or click) to choose Continue, Settings, Authors, or Exit. The RU/EN selector on the left switches the language immediately; the choice is stored in settings.
+2. Continue opens the save browser. An empty slot starts a new game in that slot, an occupied slot loads it, Delete asks for confirmation, and Escape returns to the title screen.
+3. The BIOS console prints a long, table-formatted POST report: hardware detection, memory integrity tests, module loading, subsystem status, repeated diagnostic passes, and unresolved error codes. It automatically follows new output unless you scroll up.
+4. When diagnostics finish, type `Y` and press Enter to read the operator manual, or type `N` and press Enter to skip it. This is text input; pressing the Y/N key alone does not select an answer.
+5. In the terminal, type a command and press Enter.
+
+## Saves and settings
+
+- There are six slots, stored in browser `localStorage` under `forgottenGears.saves.v1`.
+- A session autosaves every 12 seconds while a gameplay window is open, immediately when a recovery milestone changes, and when the page is unloaded or the game stops. Menus pause the play clock and autosave.
+- A save contains the robot flags, component status, event log, play time, and a full snapshot of the virtual filesystem. Loading restores the filesystem and robot state, then resets all puzzle mini-games and session-only editor/runtime state.
+- Settings are stored under `forgottenGears.settings.v1`: language, music volume, and SFX volume. The global language setting takes precedence over the language recorded in a save slot.
+- Clearing site data removes every save and resets the settings.
 
 ## Console scrolling and history
 
