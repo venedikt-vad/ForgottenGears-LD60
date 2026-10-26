@@ -1,6 +1,7 @@
 import { FONT_FAMILY } from '../../fonts'
 
 export const MENU_COLORS = {
+  // Painted on the glow layer so the opaque CRT backdrop does not hide the bloom.
   background: 'rgba(2, 8, 4, 0.94)',
   panel: 'rgba(4, 20, 10, 0.78)',
   panelAlt: 'rgba(8, 34, 17, 0.66)',
@@ -31,8 +32,8 @@ export function drawConsoleBackground(
   time = 0,
 ): void {
   ctx.save()
-  ctx.fillStyle = MENU_COLORS.background
-  ctx.fillRect(0, 0, width, height)
+  // The solid backdrop lives on the glow layer (see Game.mirrorToGlow), so the
+  // game canvas stays transparent and the bloom is not covered by it.
 
   ctx.strokeStyle = MENU_COLORS.grid
   ctx.lineWidth = 1

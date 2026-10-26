@@ -17,6 +17,7 @@ import { MainMenuWindow } from './windows/MainMenuWindow'
 import { SaveSelectWindow } from './windows/SaveSelectWindow'
 import { SettingsWindow } from './windows/SettingsWindow'
 import { ShutdownWindow } from './windows/ShutdownWindow'
+import { MENU_COLORS } from './windows/menu/MenuTheme'
 
 import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem } from './VirtualFileSystem'
@@ -488,6 +489,12 @@ const GAMEPLAY_WINDOWS = new Set([
   'rasm',
   'victory',
 ])
+
+/**
+ * Title/settings screens paint their CRT backdrop on the glow layer instead of
+ * the main canvas, matching the console's text-only bloom.
+ */
+const MENU_WINDOWS = new Set(['mainMenu', 'saves', 'settings', 'shutdown'])
 
 export class Game {
   readonly canvas: HTMLCanvasElement
@@ -1009,6 +1016,15 @@ export class Game {
     // on every screen, and comes back once the load drops to normal.
     const power = this.windows.get('powerDistribution') as unknown as { powerOverCapacity?: boolean } | undefined
     if (power?.powerOverCapacity) return
+
+    // Menu windows keep their solid backdrop off the main canvas so the glow
+    // layer can bloom the text the same way it does in the console. Supply the
+    // backdrop here, then copy the transparent UI on top of it.
+    const active = this.windows.activeId
+    if (active && MENU_WINDOWS.has(active)) {
+      glowCtx.fillStyle = MENU_COLORS.background
+      glowCtx.fillRect(0, 0, glowCanvas.width, glowCanvas.height)
+    }
 
     glowCtx.drawImage(this.canvas, 0, 0)
   }
