@@ -44,6 +44,20 @@ export interface VirtualStorageUsage {
   byteRatio: number
 }
 
+/** One file in a save-game snapshot, including both localized copies. */
+export interface VirtualFileSnapshot {
+  path: string
+  content: Record<VirtualFileLanguage, string>
+  user: boolean
+}
+
+/** Serializable state of the in-memory filesystem. Stored in save slots. */
+export interface VirtualFileSystemSnapshot {
+  files: VirtualFileSnapshot[]
+  directories: string[]
+  userDirectories: string[]
+}
+
 /**
  * Hard caps for the in-memory filesystem. Everything lives in JS memory, so the
  * quotas keep a long session from growing without bound and stalling the frame.
@@ -1112,6 +1126,13 @@ OVERHEAT:
 
   private readonly fileByPath = new Map(this.files.map((file) => [file.path, file]))
 
+  /** Pristine shipped state, used to start a brand-new session. */
+  private readonly initialSnapshot: VirtualFileSystemSnapshot
+
+  constructor() {
+    this.initialSnapshot = this.serialize()
+  }
+
   list(path = '/', language: VirtualFileLanguage = 'ru'): string[] {
     const normalized = this.normalizePath(path)
     if (this.fileByPath.has(normalized)) {
@@ -1303,6 +1324,71 @@ OVERHEAT:
     if (!file) return null
     const bytes = byteLength(file.content.ru) + byteLength(file.content.en)
     return { path: file.path, bytes, lines: file.content.ru.split('\n').length, user: Boolean(file.user) }
+  }
+
+  /** Deep copy of the whole virtual filesystem, for a save slot. */
+  serialize(): VirtualFileSystemSnapshot {
+    return {
+      files: this.files.map((file) => ({
+        path: file.path,
+        content: { ru: file.content.ru, en: file.content.en },
+        user: Boolean(file.user),
+      })),
+      directories: [...this.directories],
+      userDirectories: [...this.userDirectories],
+    }
+  }
+
+  /**
+   * Replace the live filesystem with a snapshot. Invalid or incomplete data
+   * falls back to the shipped files, so a broken save can never leave the
+   * filesystem without its root directory.
+   */
+  restore(snapshot: VirtualFileSystemSnapshot | null | undefined): void {
+    if (!snapshot || !Array.isArray(snapshot.files) || !Array.isArray(snapshot.directories)) {
+      this.restore(this.initialSnapshot)
+      return
+    }
+
+    this.files.length = 0
+    this.fileByPath.clear()
+    this.directories.clear()
+    this.userDirectories.clear()
+
+    this.directories.add('/')
+    for (const directory of snapshot.directories) {
+      if (typeof directory !== 'string' || !directory.startsWith('/')) continue
+      this.directories.add(this.normalizePath(directory))
+    }
+
+    const seen = new Set<string>()
+    for (const entry of snapshot.files) {
+      if (!entry || typeof entry.path !== 'string') continue
+      if (this.files.length >= VFS_LIMITS.maxFiles) break
+      const path = this.normalizePath(entry.path)
+      if (path === '/' || seen.has(path)) continue
+      const ru = typeof entry.content?.ru === 'string' ? entry.content.ru : ''
+      const en = typeof entry.content?.en === 'string' ? entry.content.en : ru
+      if (byteLength(ru) + byteLength(en) > VFS_LIMITS.maxFileBytes) continue
+      const file: VirtualFile = { path, content: { ru, en }, user: Boolean(entry.user) }
+      this.files.push(file)
+      this.fileByPath.set(path, file)
+      seen.add(path)
+    }
+
+    for (const directory of snapshot.userDirectories ?? []) {
+      const path = typeof directory === 'string' ? this.normalizePath(directory) : ''
+      if (path && this.directories.has(path)) this.userDirectories.add(path)
+    }
+
+    // Quotas may have changed since the save was written; refuse an overfull
+    // snapshot rather than entering a state the rest of the game cannot edit.
+    if (this.usageBytes() > VFS_LIMITS.maxTotalBytes) this.restore(this.initialSnapshot)
+  }
+
+  /** Return to the shipped files (new game). */
+  reset(): void {
+    this.restore(this.initialSnapshot)
   }
 
   /** Current fill levels against the quotas, used by every storage UI. */
