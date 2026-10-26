@@ -3,6 +3,7 @@ import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem, formatBytes, type VirtualStorageUsage } from './VirtualFileSystem'
 import type { RobotKernel } from './runtime/RobotKernel'
 import type { LaunchResult, RobotProgram } from './runtime/types'
+import { serviceScriptPath } from './runtime/servicePrograms'
 
 export interface RobotPerformance {
   /** Smoothed frames per second. */
@@ -44,6 +45,8 @@ export interface RobotProcess {
   kind: 'service' | 'program'
   /** Source path of a user program, when it was launched from storage. */
   path?: string | null
+  /** RASM file that implements the process, when one is bound to it. */
+  scriptPath: string | null
   /** Instructions a user program has retired. */
   instructions?: number
 }
@@ -369,6 +372,7 @@ export class RobotData {
         detail: definition.detail,
         kind: 'service' as const,
         path: null,
+        scriptPath: serviceScriptPath(definition.pid),
         instructions: 0,
       }
     })
@@ -388,6 +392,7 @@ export class RobotData {
       detail: program.detail,
       kind: 'program' as const,
       path: program.path,
+      scriptPath: program.path,
       instructions: program.instructions,
     }))
   }

@@ -1,3 +1,5 @@
+import { SERVICE_PROGRAM_DIR, SERVICE_PROGRAMS, serviceProgramPath } from '../runtime/servicePrograms'
+
 export type VirtualFileLanguage = 'ru' | 'en'
 
 interface VirtualFile {
@@ -63,9 +65,9 @@ export interface VirtualFileSystemSnapshot {
  * quotas keep a long session from growing without bound and stalling the frame.
  */
 export const VFS_LIMITS = {
-  maxFiles: 48,
+  maxFiles: 72,
   maxFileBytes: 16 * 1024,
-  maxTotalBytes: 128 * 1024,
+  maxTotalBytes: 192 * 1024,
   maxDirectories: 32,
 } as const
 
@@ -115,6 +117,7 @@ export class VirtualFileSystem {
     '/sys',
     '/sys/body',
     '/sys/memory',
+    SERVICE_PROGRAM_DIR,
     '/usr',
     '/usr/share',
     '/usr/share/docs',
@@ -167,6 +170,8 @@ start                запустить программу запуска тел
    сама и пишет код отказа в DIAG (1..5).
 
 Программы .rasm редактируются через vim и запускаются командой run <путь>.
+Исходники служб: /sys/services/*.rasm; в диспетчере задач клавиша E открывает
+скрипт выбранного процесса в редакторе.
 Справочник по языку RASM: /usr/share/docs/rasm.txt (cat или vim).
 Запуск программы блокируется, если вычислительный узел (CPU-730) или ядро
 операционной системы (OSK-710) недоступны.
@@ -212,6 +217,8 @@ Recommended order:
    itself and writes the failure code to DIAG (1..5).
 
 .rasm programs are edited with vim and started with run <path>.
+Service sources: /sys/services/*.rasm; press E on a task-manager row to open
+the selected process script in the editor.
 RASM language reference: /usr/share/docs/rasm.txt (cat or vim).
 Program launch is blocked while the compute unit (CPU-730) or the operating
 system kernel (OSK-710) is unavailable.
@@ -1130,6 +1137,18 @@ OVERHEAT:
   private readonly initialSnapshot: VirtualFileSystemSnapshot
 
   constructor() {
+    // One RASM source per service process. The files are shipped, editable and
+    // bound to the process table through their PID (see runtime/servicePrograms).
+    for (const program of SERVICE_PROGRAMS) {
+      const path = serviceProgramPath(program.file)
+      const file: VirtualFile = {
+        path,
+        content: { ru: program.source, en: program.source },
+      }
+      this.files.push(file)
+      this.fileByPath.set(path, file)
+    }
+
     this.initialSnapshot = this.serialize()
   }
 
