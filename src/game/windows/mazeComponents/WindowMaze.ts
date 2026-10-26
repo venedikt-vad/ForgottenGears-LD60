@@ -95,6 +95,18 @@ export class WindowMaze implements GameWindow {
     this.language = language
   }
 
+  /** Start over with a new maze; also used when another save is loaded. */
+  resetPuzzle(): void {
+    this.field = loadRandomMaze()
+    this.waves = []
+    this.scanCooldown = 0
+    this.route = []
+    this.lastPointer = null
+    this.solved = false
+    this.appearTime = APPEAR_TOTAL
+    this.popup.hide()
+  }
+
   onShow(manager: WindowManager): void {
     this.manager = manager
     this.field = loadRandomMaze()

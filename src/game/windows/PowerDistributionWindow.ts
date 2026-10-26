@@ -249,6 +249,22 @@ export class PowerDistributionWindow implements GameWindow {
     this.prevOverCapacity = this.powerOverCapacity
   }
 
+  /** Rebuild the routing board for a new game or a freshly loaded save. */
+  resetPuzzle(): void {
+    this.clock = 0
+    this.hoverIndex = -1
+    this.wasPointerDown = false
+    this.appearTime = APPEAR_TOTAL
+    this.bgWidth = 0
+    this.bgHeight = 0
+    this.linePoints.length = 0
+    this.spawnTimer = POINT_MIN_INTERVAL
+    this.popup.hide()
+    this.generate()
+    this.prevOutputsOnline = this.outputsPowered
+    this.prevOverCapacity = this.powerOverCapacity
+  }
+
   /**
    * EXPOSED GAME STATE — powered status of every output, in SYSTEMS order.
    * An output counts as powered when its cell carries power and its terminal

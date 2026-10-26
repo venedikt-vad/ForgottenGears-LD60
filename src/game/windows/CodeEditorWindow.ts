@@ -258,6 +258,34 @@ export class CodeEditorWindow implements GameWindow {
       this.loadFile(this.currentPath || this.files[this.selectedFileIndex] || '')
     }
   }
+  /** Drop buffers from the previous session before a new game or save load. */
+  resetSession(): void {
+    this.mode = 'NORMAL'
+    this.activePane = 'editor'
+    this.commandLine = ''
+    this.searchQuery = ''
+    this.searchMatches = []
+    this.searchIndex = -1
+    this.pendingNormalKey = ''
+    this.yankLine = ''
+    this.undoStack = []
+    this.checkedBufferText = null
+    this.checkResult = null
+    this.currentPath = ''
+    this.cursorRow = 0
+    this.cursorCol = 0
+    this.scrollTop = 0
+    this.fileScrollTop = 0
+    this.buffer = ['']
+    this.savedText = ''
+    this.popup.hide()
+    this.refreshFileList()
+    const wanted = this.recoveryTargetPath
+    const path = this.files.find((entry) => entry.toLowerCase() === wanted.toLowerCase())
+      ?? this.files[0]
+    if (path) this.loadFile(path)
+  }
+
   onShow(manager: WindowManager): void {
     this.manager = manager
     // Replay the appear animation each time the window is opened.

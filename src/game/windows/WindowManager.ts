@@ -29,7 +29,7 @@ export class WindowManager {
 
     this.activeWindow?.onHide?.()
     this.activeWindow = nextWindow
-    this.activeWindow.onShow?.(this)
+    this.activeWindow.onShow?.(this, this.input)
   }
 
   get activeId(): string | null {

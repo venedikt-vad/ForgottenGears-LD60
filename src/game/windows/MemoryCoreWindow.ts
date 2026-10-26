@@ -140,6 +140,20 @@ export class MemoryCoreWindow implements GameWindow {
     this.appearTime = 0
   }
 
+  /** Drop every generated cell and answer; the next render builds a new puzzle. */
+  resetPuzzle(): void {
+    this.focusRow = 0
+    this.focusCol = 0
+    this.leftSymbols = []
+    this.rowHeaders = []
+    this.values = []
+    this.puzzleCells.clear()
+    this.answers.clear()
+    this.wasPointerDown = false
+    this.appearTime = APPEAR_TOTAL
+    this.popup.hide()
+  }
+
   update(dt: number, input: Input): void {
     this.appearTime += dt
     this.popup.update(dt, this.appearTime >= APPEAR_TOTAL && this.isSolved)

@@ -4,7 +4,6 @@ import { FONT_FAMILY, LOST_LANGUAGE_FAMILY, loadFont } from './fonts'
 
 import { ConsoleWindow } from './windows/ConsoleWindow'
 import { CodeEditorWindow } from './windows/CodeEditorWindow'
-import { LanguageSelectWindow } from './windows/LanguageSelectWindow'
 import { MemoryCoreWindow } from './windows/MemoryCoreWindow'
 import { PowerDistributionWindow } from './windows/PowerDistributionWindow'
 import { UiWindow } from './windows/UiWindow'
@@ -14,6 +13,10 @@ import { ReactorCoreWindow } from './windows/ReactorCoreWindow'
 import { RasmWindow } from './windows/RasmWindow'
 import { WindowMaze } from './windows/mazeComponents/WindowMaze'
 import { VictoryWindow } from './windows/VictoryWindow'
+import { MainMenuWindow } from './windows/MainMenuWindow'
+import { SaveSelectWindow } from './windows/SaveSelectWindow'
+import { SettingsWindow } from './windows/SettingsWindow'
+import { ShutdownWindow } from './windows/ShutdownWindow'
 
 import type { GameLanguage } from './windows/GameWindow'
 import { VirtualFileSystem } from './VirtualFileSystem'
@@ -21,6 +24,16 @@ import { RobotData } from './RobotData'
 import { DemoScenario, DEMO_PROGRAM_PATH } from './rasm/scenario'
 import { RobotDeviceBus } from './runtime/RobotDeviceBus'
 import { RobotKernel } from './runtime/RobotKernel'
+import { SaveManager } from './save/SaveManager'
+import { setSfxVolume } from './sfx'
+import type {
+  GameSettings,
+  SavedAnalyzerChannelState,
+  SavedGameData,
+  SavedRobotState,
+  SavedRuntimeStatus,
+  SaveSlot,
+} from './save/types'
 
 export type RuntimeStatus = 'ONLINE' | 'DEGRADED' | 'OFFLINE' | 'CRITICAL' | 'MISSING' | 'LOCKED'
 export type RuntimeCategory = 'POWER' | 'COMPUTE' | 'OS' | 'SENSORS' | 'MOTION' | 'THERMAL' | 'SAFETY' | 'NETWORK' | 'BODY' | 'SYSTEM'
@@ -80,6 +93,14 @@ const INITIAL_COMPONENTS: RuntimeComponent[] = [
 ]
 
 const INITIAL_CHANNELS: Record<'A' | 'B', AnalyzerChannelState> = { A: 'NO_FEED', B: 'DISABLED' }
+
+const SAVED_STATUSES: ReadonlySet<SavedRuntimeStatus> = new Set([
+  'ONLINE', 'DEGRADED', 'OFFLINE', 'CRITICAL', 'MISSING', 'LOCKED',
+])
+
+const SAVED_CHANNELS: ReadonlySet<SavedAnalyzerChannelState> = new Set([
+  'NO_FEED', 'DISABLED', 'READY', 'ONLINE', 'FAULT',
+])
 
 /** Shared in-memory state for all service windows and puzzles in one game session. */
 export class RobotSystem {
@@ -364,6 +385,80 @@ export class RobotSystem {
     for (const component of this.components.values()) counts[component.status] += 1
     return counts
   }
+
+  /** Snapshot of every mutable robot flag, component and log entry. */
+  getSaveState(): SavedRobotState {
+    return {
+      components: [...this.components.values()].map((component) => ({
+        id: component.id,
+        status: component.status,
+        fault: component.fault,
+      })),
+      events: this.events.map((event) => ({ ...event })),
+      eventClock: this.eventClock,
+      channels: { ...this.channels },
+      flags: {
+        reactorRestored: this.reactorRestored,
+        analyzerControllerPowered: this.analyzerControllerPowered,
+        powerGridPuzzleSolved: this.powerGridPuzzleSolved,
+        busBypassRestored: this.busBypassRestored,
+        bodyBusRestored: this.bodyBusRestored,
+        analyzerValidated: this.analyzerValidated,
+        memoryCoreRestored: this.memoryCoreRestored,
+        motionProfileRestored: this.motionProfileRestored,
+        coolingRestored: this.coolingRestored,
+        visionRestored: this.visionRestored,
+        motionStartupComplete: this.motionStartupComplete,
+        thermalShutdownCount: this.thermalShutdownCount,
+      },
+    }
+  }
+
+  /** Restore a save slot over the pristine component definitions. */
+  applySaveState(state: SavedRobotState): void {
+    this.reset()
+    if (!state || typeof state !== 'object') return
+
+    for (const saved of state.components ?? []) {
+      if (!saved || typeof saved.id !== 'string') continue
+      const component = this.components.get(saved.id.toUpperCase())
+      if (!component) continue
+      if (SAVED_STATUSES.has(saved.status)) component.status = saved.status
+      if (typeof saved.fault === 'string') component.fault = saved.fault
+    }
+
+    const flags = state.flags ?? ({} as SavedRobotState['flags'])
+    this.reactorRestored = Boolean(flags.reactorRestored)
+    this.analyzerControllerPowered = Boolean(flags.analyzerControllerPowered)
+    this.powerGridPuzzleSolved = Boolean(flags.powerGridPuzzleSolved)
+    this.busBypassRestored = Boolean(flags.busBypassRestored)
+    this.bodyBusRestored = Boolean(flags.bodyBusRestored)
+    this.analyzerValidated = Boolean(flags.analyzerValidated)
+    this.memoryCoreRestored = Boolean(flags.memoryCoreRestored)
+    this.motionProfileRestored = Boolean(flags.motionProfileRestored)
+    this.coolingRestored = Boolean(flags.coolingRestored)
+    this.visionRestored = Boolean(flags.visionRestored)
+    this.motionStartupComplete = Boolean(flags.motionStartupComplete)
+    const shutdowns = Number(flags.thermalShutdownCount)
+    this.thermalShutdownCount = Number.isFinite(shutdowns) ? Math.max(0, Math.floor(shutdowns)) : 0
+
+    const channels = state.channels ?? INITIAL_CHANNELS
+    this.channels.A = SAVED_CHANNELS.has(channels.A) ? channels.A as AnalyzerChannelState : INITIAL_CHANNELS.A
+    this.channels.B = SAVED_CHANNELS.has(channels.B) ? channels.B as AnalyzerChannelState : INITIAL_CHANNELS.B
+
+    if (Array.isArray(state.events)) {
+      this.events = state.events
+        .filter((event) => event && typeof event.message === 'string')
+        .map((event) => ({
+          time: Number.isFinite(event.time) ? event.time : 0,
+          level: event.level === 'WARN' || event.level === 'ERROR' || event.level === 'OK' ? event.level : 'INFO',
+          source: typeof event.source === 'string' ? event.source : 'SYSTEM',
+          message: event.message,
+        }))
+    }
+    const clock = Number(state.eventClock)
+    this.eventClock = Number.isFinite(clock) ? Math.max(this.events.length, Math.floor(clock)) : this.events.length
+  }
 }
 
 /** Single authoritative robot-state instance, owned by the Game.ts module. */
@@ -377,6 +472,23 @@ export type GameOptions = {
 // Ambient soundtrack, looped for the whole session.
 const BACKGROUND_MUSIC = `${import.meta.env.BASE_URL}sound/Project_45.mp3`
 
+/** Autosave cadence while the player is in a recovery session. */
+const AUTOSAVE_INTERVAL = 12
+
+/** Windows that count as active gameplay; menus pause the play clock and autosave. */
+const GAMEPLAY_WINDOWS = new Set([
+  'console',
+  'editor',
+  'ui',
+  'tasks',
+  'reactor',
+  'memoryCore',
+  'powerDistribution',
+  'maze',
+  'rasm',
+  'victory',
+])
+
 export class Game {
   readonly canvas: HTMLCanvasElement
   readonly ctx: CanvasRenderingContext2D
@@ -387,6 +499,8 @@ export class Game {
   readonly cursor: CursorDrawer
   /** Authoritative robot state for this gameplay session. All component and puzzle data lives in this Game.ts module. */
   readonly robotSystem = sharedRobotSystem
+  /** Persistent slot and settings storage. */
+  readonly saveManager: SaveManager
 
   private width = 0
   private height = 0
@@ -400,11 +514,34 @@ export class Game {
   private kernel: RobotKernel | null = null
   /** The shell that owns the `start` flow and the process control verbs. */
   private consoleWindow: ConsoleWindow | null = null
+  /** Session filesystem; snapshotted into every save slot. */
+  private fileSystem: VirtualFileSystem
+  private codeEditor: CodeEditorWindow | null = null
+  private uiWindow: UiWindow | null = null
+  private taskManagerWindow: TaskManagerWindow | null = null
+  private victoryWindow: VictoryWindow | null = null
+  private reactorWindow: ReactorCoreWindow | null = null
+  private memoryCoreWindow: MemoryCoreWindow | null = null
+  private powerWindow: PowerDistributionWindow | null = null
+  private mazeWindow: WindowMaze | null = null
+  private rasmWindow: RasmWindow | null = null
+  private mainMenu: MainMenuWindow | null = null
+  private saveSelect: SaveSelectWindow | null = null
+  private settingsWindow: SettingsWindow | null = null
+  private shutdownWindow: ShutdownWindow | null = null
   /** Console language of the running session; every window follows it. */
   private language: GameLanguage = 'ru'
+  /** Persisted operator settings (language and audio levels). */
+  private settings: GameSettings
+  /** Slot that receives autosaves; null while browsing the menu. */
+  private activeSlotId: number | null = null
+  private playSeconds = 0
+  private autosaveTimer = 0
+  private lastProgressSignature = ''
 
   private player = { x: 200, y: 200, size: 32, speed: 240 }
   private readonly onResize = () => this.resize()
+  private readonly onBeforeUnload = () => this.saveActiveSlot()
 
   constructor(options: GameOptions) {
     this.canvas = options.canvas
@@ -421,11 +558,16 @@ export class Game {
     this.windows = new WindowManager(this.input)
     this.cursor = new CursorDrawer()
 
+    this.saveManager = new SaveManager()
+    this.settings = this.saveManager.loadSettings()
+    this.language = this.settings.language
+
     // Reset shared state for a new gameplay session. Every subsystem below reports
     // to this same object, and UiWindow reads directly from it.
     this.robotSystem.reset()
 
-    const fileSystem = new VirtualFileSystem()
+    this.fileSystem = new VirtualFileSystem()
+    const fileSystem = this.fileSystem
 
     // The hardware bus a program sees: it answers from the robot's real
     // components, so a script can only touch hardware that is powered.
@@ -475,9 +617,14 @@ export class Game {
     })
     const consoleWindow = new ConsoleWindow(fileSystem, codeEditor, this.robotSystem, robotData)
     this.consoleWindow = consoleWindow
+    this.codeEditor = codeEditor
+
     const uiWindow = new UiWindow(this.robotSystem, robotData)
     const taskManagerWindow = new TaskManagerWindow(robotData)
     const victoryWindow = new VictoryWindow()
+    this.uiWindow = uiWindow
+    this.taskManagerWindow = taskManagerWindow
+    this.victoryWindow = victoryWindow
 
     // Existing puzzle windows keep their current constructors. Game.ts owns all
     // robot state; the maze only reports completion through this callback.
@@ -487,6 +634,10 @@ export class Game {
     const maze = new WindowMaze({
       onSolved: () => this.robotSystem.completeBusBypassPuzzle(),
     })
+    this.reactorWindow = reactor
+    this.memoryCoreWindow = memoryCore
+    this.powerWindow = powerDistribution
+    this.mazeWindow = maze
 
     // RASM demo level: a temperature sensor and a motor on a generic device bus.
     // Compiling a valid program counts as restoring the motion profile, the same
@@ -497,25 +648,46 @@ export class Game {
       robotBus: deviceBus,
       onProgramValidated: () => this.robotSystem.completeMotionProfile(),
     })
+    this.rasmWindow = rasmWindow
     // Seed the debugger with the shipped sample so the player has a working
     // program to step through, and a known-good reference when editing.
     const sampleSource = fileSystem.read(DEMO_PROGRAM_PATH, 'en')
     if (sampleSource) rasmWindow.loadSource(sampleSource.join('\n'))
 
-    const languageWindow = new LanguageSelectWindow((language: GameLanguage) => {
-      this.language = language
-      consoleWindow.setLanguage(language)
-      codeEditor.setLanguage(language)
-      uiWindow.setLanguage(language)
-      taskManagerWindow.setLanguage(language)
-      victoryWindow.setLanguage(language)
-      maze.setLanguage(language)
-      rasmWindow.setLanguage(language)
-      this.windows.show('console')
+    // Title screen and the configuration screens behind it.
+    const mainMenu = new MainMenuWindow({
+      getSaveCount: () => this.saveManager.countSaves(),
+      getLanguage: () => this.language,
+      onLanguageChange: (language) => this.changeLanguage(language),
+      onContinue: () => this.windows.show('saves'),
+      onSettings: () => this.windows.show('settings'),
+      onExit: () => this.windows.show('shutdown'),
     })
+    const saveSelect = new SaveSelectWindow({
+      saveManager: this.saveManager,
+      onLoad: (slot) => this.loadGame(slot),
+      onNewGame: (slotId) => this.startNewGame(slotId),
+      onDelete: (slotId) => this.handleSlotDeleted(slotId),
+      onBack: () => this.windows.show('mainMenu'),
+    })
+    const settingsWindow = new SettingsWindow({
+      getSettings: () => this.settings,
+      onChange: (settings) => this.changeSettings(settings),
+      onBack: () => this.windows.show('mainMenu'),
+    })
+    const shutdownWindow = new ShutdownWindow({
+      onReturn: () => this.windows.show('mainMenu'),
+    })
+    this.mainMenu = mainMenu
+    this.saveSelect = saveSelect
+    this.settingsWindow = settingsWindow
+    this.shutdownWindow = shutdownWindow
 
     this.windows
-      .register(languageWindow)
+      .register(mainMenu)
+      .register(saveSelect)
+      .register(settingsWindow)
+      .register(shutdownWindow)
       .register(consoleWindow)
       .register(codeEditor)
       .register(uiWindow)
@@ -527,8 +699,161 @@ export class Game {
       .register(rasmWindow)
       .register(victoryWindow)
 
-    // Start at the language picker, then continue to the recovery console.
-    this.windows.show('language')
+    // Apply the stored language and audio levels before the title screen appears.
+    this.applyLanguage(this.language)
+    this.applyAudioSettings()
+    this.windows.show('mainMenu')
+  }
+
+  /** Push the selected language into every screen without touching the save slot. */
+  private applyLanguage(language: GameLanguage): void {
+    this.language = language
+    this.mainMenu?.setLanguage(language)
+    this.saveSelect?.setLanguage(language)
+    this.settingsWindow?.setLanguage(language)
+    this.shutdownWindow?.setLanguage(language)
+    this.consoleWindow?.setLanguage(language)
+    this.codeEditor?.setLanguage(language)
+    this.uiWindow?.setLanguage(language)
+    this.taskManagerWindow?.setLanguage(language)
+    this.victoryWindow?.setLanguage(language)
+    this.mazeWindow?.setLanguage(language)
+    this.rasmWindow?.setLanguage(language)
+  }
+
+  /** Title-screen language switch; the choice is stored with the settings. */
+  private changeLanguage(language: GameLanguage): void {
+    if (language === this.language) return
+    this.settings = this.saveManager.saveSettings({ ...this.settings, language })
+    this.applyLanguage(language)
+  }
+
+  /** Settings-screen callback. Applies audio immediately and persists the values. */
+  private changeSettings(settings: GameSettings): void {
+    this.settings = this.saveManager.saveSettings(settings)
+    if (this.language !== this.settings.language) this.applyLanguage(this.settings.language)
+    this.applyAudioSettings()
+  }
+
+  private applyAudioSettings(): void {
+    setSfxVolume(this.settings.sfxVolume)
+    if (this.bgMusic) this.bgMusic.volume = this.settings.musicVolume
+  }
+
+  /** Fresh puzzle layouts and a clean shell for a new session or a loaded save. */
+  private resetSessionWindows(): void {
+    this.kernel?.clear()
+    this.robotData?.resetLatches()
+    this.codeEditor?.resetSession()
+    this.consoleWindow?.setLanguage(this.language)
+    this.reactorWindow?.resetPuzzle()
+    this.memoryCoreWindow?.resetPuzzle()
+    this.powerWindow?.resetPuzzle()
+    this.mazeWindow?.resetPuzzle()
+    const sample = this.fileSystem.read(DEMO_PROGRAM_PATH, 'en')
+    if (sample) this.rasmWindow?.loadSource(sample.join('\n'))
+  }
+
+  /** Start a brand-new recovery session in the given save slot. */
+  private startNewGame(slotId: number): void {
+    this.activeSlotId = slotId
+    this.playSeconds = 0
+    this.fileSystem.reset()
+    this.resetSessionWindows()
+    // The reset also reloads the shipped RASM sample, which validates itself
+    // through the normal callback. Reset the robot afterwards so a new game
+    // starts from the pristine component state, not from that side effect.
+    this.robotSystem.reset()
+    this.autosaveTimer = 0
+    this.lastProgressSignature = this.progressSignature()
+    this.windows.show('console')
+    // Create the slot immediately, so CONTINUE lists the session even if the
+    // player reloads before the first timed autosave.
+    this.saveActiveSlot()
+  }
+
+  /** Stop autosaving into a slot the player deleted from the browser. */
+  private handleSlotDeleted(slotId: number): void {
+    if (this.activeSlotId !== slotId) return
+    this.activeSlotId = null
+    this.playSeconds = 0
+    this.autosaveTimer = 0
+    this.lastProgressSignature = ''
+  }
+
+  /** Restore a slot and continue in the console. */
+  private loadGame(slot: SaveSlot): void {
+    this.activeSlotId = slot.id
+    this.playSeconds = slot.playSeconds
+    this.fileSystem.restore(slot.data.fileSystem)
+    this.resetSessionWindows()
+    // Apply the saved state last: opening the editor or the RASM sample must
+    // not count as progress made during this loaded session.
+    this.robotSystem.applySaveState(slot.data.robot)
+    this.autosaveTimer = 0
+    this.lastProgressSignature = this.progressSignature()
+    this.windows.show('console')
+  }
+
+  private captureSaveData(): SavedGameData {
+    return {
+      version: 1,
+      language: this.language,
+      savedAt: Date.now(),
+      robot: this.robotSystem.getSaveState(),
+      fileSystem: this.fileSystem.serialize(),
+    }
+  }
+
+  /** Write the live session into its slot. No-op while no slot is active. */
+  private saveActiveSlot(): void {
+    if (this.activeSlotId === null) return
+    const progress = this.robotSystem.getProgress()
+    const written = this.saveManager.writeSlot(this.activeSlotId, this.captureSaveData(), {
+      playSeconds: this.playSeconds,
+      progressDone: progress.filter((entry) => entry.done).length,
+      progressTotal: progress.length,
+    })
+    if (written) this.lastProgressSignature = this.progressSignature()
+  }
+
+  /** Cheap fingerprint of the recovery flags; drives immediate autosaves. */
+  private progressSignature(): string {
+    const state = this.robotSystem
+    return [
+      state.reactorRestored,
+      state.analyzerControllerPowered,
+      state.powerGridPuzzleSolved,
+      state.busBypassRestored,
+      state.bodyBusRestored,
+      state.analyzerValidated,
+      state.memoryCoreRestored,
+      state.motionProfileRestored,
+      state.coolingRestored,
+      state.visionRestored,
+      state.motionStartupComplete,
+      state.thermalShutdownCount,
+    ].map((value) => (typeof value === 'boolean' ? (value ? '1' : '0') : String(value))).join('|')
+  }
+
+  /** Advance the play clock and autosave on progress changes or on a timer. */
+  private updateAutosave(dt: number): void {
+    if (this.activeSlotId === null) return
+    const active = this.windows.activeId
+    if (!active || !GAMEPLAY_WINDOWS.has(active)) return
+
+    this.playSeconds += dt
+    this.autosaveTimer += dt
+    const signature = this.progressSignature()
+    if (signature !== this.lastProgressSignature) {
+      this.saveActiveSlot()
+      this.autosaveTimer = 0
+      return
+    }
+    if (this.autosaveTimer >= AUTOSAVE_INTERVAL) {
+      this.autosaveTimer = 0
+      this.saveActiveSlot()
+    }
   }
 
   start() {
@@ -543,6 +868,7 @@ export class Game {
     this.input.attach()
     this.cursor.attach(this.canvas)
     window.addEventListener('resize', this.onResize)
+    window.addEventListener('beforeunload', this.onBeforeUnload)
     this.resize()
 
     this.lastTime = performance.now()
@@ -554,7 +880,7 @@ export class Game {
     if (!this.bgMusic) {
       const music = new Audio(BACKGROUND_MUSIC)
       music.loop = true
-      music.volume = 0.5
+      music.volume = this.settings.musicVolume
       this.bgMusic = music
     }
 
@@ -576,9 +902,11 @@ export class Game {
 
   stop() {
     this.running = false
+    this.saveActiveSlot()
     this.input.detach()
     this.cursor.detach()
     window.removeEventListener('resize', this.onResize)
+    window.removeEventListener('beforeunload', this.onBeforeUnload)
   }
 
   private readonly loop = (time: number) => {
@@ -614,6 +942,7 @@ export class Game {
     p.x = Math.max(half, Math.min(this.width - half, p.x))
     p.y = Math.max(half, Math.min(this.height - half, p.y))
     this.windows.update(dt)
+    this.updateAutosave(dt)
     this.syncPuzzleProgress()
     // The runtime lives outside the window manager: programs keep running while
     // another window is open, and the shell notices a finished startup program

@@ -10,6 +10,12 @@ export type SfxName =
   | 'power_loss'
 
 const DEFAULT_VOLUME = 0.6
+let masterVolume = DEFAULT_VOLUME
+
+/** Settings slider value, 0..1. Individual calls may still override it. */
+export function setSfxVolume(volume: number): void {
+  masterVolume = Math.min(1, Math.max(0, volume))
+}
 
 // One template per effect keeps the browser cache warm for the first play.
 const templates = new Map<SfxName, HTMLAudioElement>()
@@ -25,7 +31,7 @@ function templateFor(name: SfxName): HTMLAudioElement {
 }
 
 /** Plays a sound effect; every call gets its own copy so plays can overlap. */
-export function playSfx(name: SfxName, volume = DEFAULT_VOLUME): void {
+export function playSfx(name: SfxName, volume = masterVolume): void {
   const audio = templateFor(name).cloneNode(true) as HTMLAudioElement
   audio.volume = volume
   // Autoplay may be blocked until the first user gesture; the miss is harmless.

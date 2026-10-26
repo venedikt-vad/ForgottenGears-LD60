@@ -304,6 +304,22 @@ export class ReactorCoreWindow implements GameWindow {
     this.appearTime = 0
   }
 
+  /** Fresh puzzle for a new game or a loaded save. */
+  resetPuzzle(): void {
+    this.solved = false
+    this.wasSolved = false
+    this.activeRing = null
+    this.time = 0
+    this.appearTime = APPEAR_TOTAL
+    this.stabilitySamples.length = 0
+    this.stabilityTimer = 0
+    this.decorAngles[0] = 0
+    this.decorAngles[1] = 0
+    this.decorAngles[2] = 0
+    this.popup.hide()
+    this.generatePuzzle()
+  }
+
   update(dt: number, input: Input): void {
     this.time += dt
     if (this.appearTime < APPEAR_TOTAL) {
