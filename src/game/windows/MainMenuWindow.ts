@@ -9,6 +9,7 @@ import {
   drawPanel,
   drawProgressBar,
   drawRule,
+  fillGlowText,
   fitText,
   includesPoint,
   menuFont,
@@ -207,12 +208,12 @@ export class MainMenuWindow implements GameWindow {
     ctx.textBaseline = 'top'
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(text.kicker, margin, margin)
+    fillGlowText(ctx, text.kicker, margin, margin)
 
     const saveCount = this.options.getSaveCount()
     ctx.textAlign = 'right'
     ctx.fillStyle = MENU_COLORS.text
-    ctx.fillText(`${text.saveSlots}: ${saveCount} / 6`, width - margin, margin)
+    fillGlowText(ctx, `${text.saveSlots}: ${saveCount} / 6`, width - margin, margin)
     ctx.textAlign = 'left'
 
     const titleY = margin + lineHeight * 1.8
@@ -234,7 +235,7 @@ export class MainMenuWindow implements GameWindow {
 
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(
+    fillGlowText(ctx,
       fitText(ctx, text.subtitle, width - margin * 2),
       margin + 2,
       titleY + titleSize + 7,
@@ -245,7 +246,7 @@ export class MainMenuWindow implements GameWindow {
 
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(ru ? 'ВЫБЕРИТЕ ДЕЙСТВИЕ' : 'SELECT AN ACTION', margin + 2, ruleY + 11)
+    fillGlowText(ctx, ru ? 'ВЫБЕРИТЕ ДЕЙСТВИЕ' : 'SELECT AN ACTION', margin + 2, ruleY + 11)
 
     const menuTop = ruleY + 11 + lineHeight * 1.9
     this.rowRects = []
@@ -284,7 +285,7 @@ export class MainMenuWindow implements GameWindow {
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       const marker = selected ? '>' : ' '
-      ctx.fillText(
+      fillGlowText(ctx,
         `${marker} ${String(index + 1).padStart(2, '0')}  ${text.menu[index]}`,
         rect.x + 15,
         rect.y + rect.height / 2 + 1,
@@ -294,7 +295,7 @@ export class MainMenuWindow implements GameWindow {
         ctx.font = menuFont(Math.max(8, small - 1))
         ctx.textAlign = 'right'
         ctx.fillStyle = MENU_COLORS.dim
-        ctx.fillText('ENTER', rect.x + rect.width - 12, rect.y + rect.height / 2 + 1)
+        fillGlowText(ctx, 'ENTER', rect.x + rect.width - 12, rect.y + rect.height / 2 + 1)
       }
       ctx.restore()
     }
@@ -313,10 +314,10 @@ export class MainMenuWindow implements GameWindow {
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
     ctx.textAlign = 'left'
-    ctx.fillText(text.language, panelRect.x + 12, panelRect.y + 8)
+    fillGlowText(ctx, text.language, panelRect.x + 12, panelRect.y + 8)
     ctx.textAlign = 'right'
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(text.languageHint, panelRect.x + panelRect.width - 12, panelRect.y + 8)
+    fillGlowText(ctx, text.languageHint, panelRect.x + panelRect.width - 12, panelRect.y + 8)
     ctx.textAlign = 'left'
 
     const optionGap = 8
@@ -345,7 +346,7 @@ export class MainMenuWindow implements GameWindow {
       ctx.fillStyle = selected ? MENU_COLORS.bright : MENU_COLORS.dim
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(option.label[this.language], rect.x + rect.width / 2, rect.y + rect.height / 2 + 1)
+      fillGlowText(ctx, option.label[this.language], rect.x + rect.width / 2, rect.y + rect.height / 2 + 1)
     }
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
@@ -363,7 +364,7 @@ export class MainMenuWindow implements GameWindow {
       const pad = 14
       ctx.font = menuFont(small + 1, true)
       ctx.fillStyle = MENU_COLORS.text
-      ctx.fillText(ru ? 'СОСТОЯНИЕ СИСТЕМЫ' : 'SYSTEM STATUS', statusRect.x + pad, statusRect.y + 12)
+      fillGlowText(ctx, ru ? 'СОСТОЯНИЕ СИСТЕМЫ' : 'SYSTEM STATUS', statusRect.x + pad, statusRect.y + 12)
       drawRule(ctx, statusRect.x + pad, statusRect.y + 31, statusRect.width - pad * 2, 1)
       const lines = [
         `${text.ready}`,
@@ -375,12 +376,12 @@ export class MainMenuWindow implements GameWindow {
       lines.forEach((line, index) => {
         ctx.font = menuFont(small)
         ctx.fillStyle = index === 0 ? MENU_COLORS.green : MENU_COLORS.dim
-        ctx.fillText(fitText(ctx, line, statusRect.width - pad * 2), statusRect.x + pad, statusRect.y + 42 + index * lineHeight * 1.35)
+        fillGlowText(ctx, fitText(ctx, line, statusRect.width - pad * 2), statusRect.x + pad, statusRect.y + 42 + index * lineHeight * 1.35)
       })
 
       const barY = statusRect.y + statusRect.height - 28
       ctx.fillStyle = MENU_COLORS.dim
-      ctx.fillText(ru ? 'ЗАГРУЗКА ЯДРА' : 'KERNEL LOAD', statusRect.x + pad, barY - lineHeight - 2)
+      fillGlowText(ctx, ru ? 'ЗАГРУЗКА ЯДРА' : 'KERNEL LOAD', statusRect.x + pad, barY - lineHeight - 2)
       drawProgressBar(
         ctx,
         { x: statusRect.x + pad, y: barY, width: statusRect.width - pad * 2, height: 4 },
@@ -399,13 +400,13 @@ export class MainMenuWindow implements GameWindow {
     const footerY = height - margin - lineHeight
     if (this.message) {
       ctx.fillStyle = MENU_COLORS.yellow
-      ctx.fillText(fitText(ctx, this.message, width - margin * 2), margin, footerY)
+      fillGlowText(ctx, fitText(ctx, this.message, width - margin * 2), margin, footerY)
     } else {
       ctx.fillStyle = MENU_COLORS.dim
-      ctx.fillText(fitText(ctx, text.hints, width * 0.72), margin, footerY)
+      fillGlowText(ctx, fitText(ctx, text.hints, width * 0.72), margin, footerY)
       ctx.textAlign = 'right'
       ctx.fillStyle = MENU_COLORS.dim
-      ctx.fillText(`FG-OS 1.08  ·  ${this.language.toUpperCase()}`, width - margin, footerY)
+      fillGlowText(ctx, `FG-OS 1.08  ·  ${this.language.toUpperCase()}`, width - margin, footerY)
       ctx.textAlign = 'left'
     }
 

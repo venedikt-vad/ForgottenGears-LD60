@@ -105,6 +105,25 @@ export function drawPanel(
   ctx.restore()
 }
 
+/**
+ * Draw text with the same subtle phosphor halo as console text. Uses the
+ * context's current font, fill style and alignment.
+ */
+export function fillGlowText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  blur = 2,
+): void {
+  if (!text) return
+  ctx.save()
+  ctx.shadowColor = 'rgba(114, 255, 98, 0.22)'
+  ctx.shadowBlur = blur
+  ctx.fillText(text, x, y)
+  ctx.restore()
+}
+
 export function drawGlowText(
   ctx: CanvasRenderingContext2D,
   text: string,

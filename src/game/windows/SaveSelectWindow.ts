@@ -10,6 +10,7 @@ import {
   drawPanel,
   drawProgressBar,
   drawRule,
+  fillGlowText,
   fitText,
   formatDuration,
   formatSaveDate,
@@ -266,12 +267,12 @@ export class SaveSelectWindow implements GameWindow {
     ctx.fillStyle = MENU_COLORS.bright
     ctx.shadowColor = 'rgba(114, 255, 98, 0.3)'
     ctx.shadowBlur = 8
-    ctx.fillText(text.title, margin, margin)
+    fillGlowText(ctx, text.title, margin, margin)
     ctx.shadowBlur = 0
 
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(fitText(ctx, text.subtitle, width - margin * 2), margin, margin + titleSize + 8)
+    fillGlowText(ctx, fitText(ctx, text.subtitle, width - margin * 2), margin, margin + titleSize + 8)
 
     const ruleY = margin + titleSize + lineHeight * 2.1
     drawRule(ctx, margin, ruleY, width - margin * 2)
@@ -294,11 +295,11 @@ export class SaveSelectWindow implements GameWindow {
     const progressWidth = Math.min(190, Math.max(110, listWidth * 0.25))
     const dateX = margin + listWidth - 10
     const progressX = dateX - progressWidth - 18
-    ctx.fillText(text.headers[0], slotX, listTop + 1)
-    ctx.fillText(text.headers[1], nameX, listTop + 1)
-    ctx.fillText(text.headers[2], Math.max(nameX + 100, progressX - 92), listTop + 1)
+    fillGlowText(ctx, text.headers[0], slotX, listTop + 1)
+    fillGlowText(ctx, text.headers[1], nameX, listTop + 1)
+    fillGlowText(ctx, text.headers[2], Math.max(nameX + 100, progressX - 92), listTop + 1)
     ctx.textAlign = 'right'
-    ctx.fillText(text.headers[3], dateX, listTop + 1)
+    fillGlowText(ctx, text.headers[3], dateX, listTop + 1)
     ctx.textAlign = 'left'
     drawRule(ctx, margin, listTop + headerHeight - 4, listWidth, 1, 'rgba(83, 158, 98, 0.2)')
 
@@ -334,24 +335,24 @@ export class SaveSelectWindow implements GameWindow {
 
       ctx.font = menuFont(small + 1, selected)
       ctx.fillStyle = selected ? MENU_COLORS.bright : MENU_COLORS.dim
-      ctx.fillText(String(index + 1).padStart(2, '0'), slotX, rect.y + 9)
+      fillGlowText(ctx, String(index + 1).padStart(2, '0'), slotX, rect.y + 9)
 
       if (!slot) {
         ctx.fillStyle = selected ? MENU_COLORS.text : MENU_COLORS.dim
-        ctx.fillText(text.empty, nameX, rect.y + 9)
+        fillGlowText(ctx, text.empty, nameX, rect.y + 9)
         ctx.font = menuFont(small)
         ctx.fillStyle = MENU_COLORS.dim
-        ctx.fillText(selected ? `ENTER — ${text.newGame}` : text.newGame, nameX, rect.y + 9 + lineHeight * 1.25)
+        fillGlowText(ctx, selected ? `ENTER — ${text.newGame}` : text.newGame, nameX, rect.y + 9 + lineHeight * 1.25)
       } else {
         ctx.fillStyle = selected ? MENU_COLORS.bright : MENU_COLORS.text
-        ctx.fillText(fitText(ctx, slot.name, Math.max(80, progressX - nameX - 12)), nameX, rect.y + 9)
+        fillGlowText(ctx, fitText(ctx, slot.name, Math.max(80, progressX - nameX - 12)), nameX, rect.y + 9)
 
         const ratio = slot.progressTotal > 0 ? slot.progressDone / slot.progressTotal : 0
         const compact = rowHeight < 54
         if (!compact) {
           ctx.font = menuFont(small)
           ctx.fillStyle = MENU_COLORS.dim
-          ctx.fillText(`${text.progress} ${slot.progressDone} / ${slot.progressTotal}`, nameX, rect.y + 9 + lineHeight * 1.2)
+          fillGlowText(ctx, `${text.progress} ${slot.progressDone} / ${slot.progressTotal}`, nameX, rect.y + 9 + lineHeight * 1.2)
         }
         drawProgressBar(
           ctx,
@@ -367,9 +368,9 @@ export class SaveSelectWindow implements GameWindow {
         ctx.font = menuFont(small)
         ctx.textAlign = 'right'
         ctx.fillStyle = MENU_COLORS.text
-        ctx.fillText(`${Math.round(ratio * 100)}%`, dateX, rect.y + (compact ? rowHeight / 2 - lineHeight / 2 : rowHeight - 26))
+        fillGlowText(ctx, `${Math.round(ratio * 100)}%`, dateX, rect.y + (compact ? rowHeight / 2 - lineHeight / 2 : rowHeight - 26))
         ctx.fillStyle = MENU_COLORS.dim
-        ctx.fillText(formatSaveDate(slot.updatedAt, this.language), dateX, rect.y + (compact ? rowHeight / 2 + 2 : rowHeight - 12))
+        fillGlowText(ctx, formatSaveDate(slot.updatedAt, this.language), dateX, rect.y + (compact ? rowHeight / 2 + 2 : rowHeight - 12))
         ctx.textAlign = 'left'
       }
 
@@ -377,7 +378,7 @@ export class SaveSelectWindow implements GameWindow {
         ctx.font = menuFont(Math.max(8, small - 1))
         ctx.fillStyle = MENU_COLORS.dim
         ctx.textAlign = 'right'
-        ctx.fillText(slot ? text.load : text.newGame, rect.x + rect.width - 10, rect.y + 9)
+        fillGlowText(ctx, slot ? text.load : text.newGame, rect.x + rect.width - 10, rect.y + 9)
         ctx.textAlign = 'left'
       }
     }
@@ -397,10 +398,10 @@ export class SaveSelectWindow implements GameWindow {
     const footerY = height - margin - lineHeight
     if (this.message) {
       ctx.fillStyle = MENU_COLORS.yellow
-      ctx.fillText(fitText(ctx, this.message, width - margin * 2), margin, footerY)
+      fillGlowText(ctx, fitText(ctx, this.message, width - margin * 2), margin, footerY)
     } else {
       ctx.fillStyle = MENU_COLORS.dim
-      ctx.fillText(fitText(ctx, text.hints, width - margin * 2), margin, footerY)
+      fillGlowText(ctx, fitText(ctx, text.hints, width - margin * 2), margin, footerY)
     }
 
     if (this.pendingDelete) {
@@ -423,21 +424,21 @@ export class SaveSelectWindow implements GameWindow {
     ctx.textAlign = 'left'
     ctx.font = menuFont(small + 1, true)
     ctx.fillStyle = MENU_COLORS.text
-    ctx.fillText(`${text.slot} ${String(this.selectedIndex + 1).padStart(2, '0')}`, rect.x + pad, rect.y + 11)
+    fillGlowText(ctx, `${text.slot} ${String(this.selectedIndex + 1).padStart(2, '0')}`, rect.x + pad, rect.y + 11)
     drawRule(ctx, rect.x + pad, rect.y + 30, rect.width - pad * 2)
 
     if (!slot) {
       ctx.font = menuFont(small)
       ctx.fillStyle = MENU_COLORS.dim
-      ctx.fillText(text.empty, rect.x + pad, rect.y + 43)
-      ctx.fillText(`ENTER — ${text.newGame}`, rect.x + pad, rect.y + 43 + lineHeight * 1.4)
+      fillGlowText(ctx, text.empty, rect.x + pad, rect.y + 43)
+      fillGlowText(ctx, `ENTER — ${text.newGame}`, rect.x + pad, rect.y + 43 + lineHeight * 1.4)
       return
     }
 
     let y = rect.y + 42
     ctx.font = menuFont(small + 2, true)
     ctx.fillStyle = MENU_COLORS.bright
-    ctx.fillText(fitText(ctx, slot.name, rect.width - pad * 2), rect.x + pad, y)
+    fillGlowText(ctx, fitText(ctx, slot.name, rect.width - pad * 2), rect.x + pad, y)
     y += lineHeight * 1.7
 
     const rows: Array<[string, string]> = [
@@ -448,10 +449,10 @@ export class SaveSelectWindow implements GameWindow {
     for (const [label, value] of rows) {
       ctx.font = menuFont(small)
       ctx.fillStyle = MENU_COLORS.dim
-      ctx.fillText(label, rect.x + pad, y)
+      fillGlowText(ctx, label, rect.x + pad, y)
       ctx.textAlign = 'right'
       ctx.fillStyle = MENU_COLORS.text
-      ctx.fillText(value, rect.x + rect.width - pad, y)
+      fillGlowText(ctx, value, rect.x + rect.width - pad, y)
       ctx.textAlign = 'left'
       y += lineHeight * 1.35
     }
@@ -460,10 +461,10 @@ export class SaveSelectWindow implements GameWindow {
     y += lineHeight * 0.4
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(`${text.progress}  ${slot.progressDone} / ${slot.progressTotal}`, rect.x + pad, y)
+    fillGlowText(ctx, `${text.progress}  ${slot.progressDone} / ${slot.progressTotal}`, rect.x + pad, y)
     ctx.textAlign = 'right'
     ctx.fillStyle = MENU_COLORS.text
-    ctx.fillText(`${Math.round(ratio * 100)}%`, rect.x + rect.width - pad, y)
+    fillGlowText(ctx, `${Math.round(ratio * 100)}%`, rect.x + rect.width - pad, y)
     ctx.textAlign = 'left'
     drawProgressBar(
       ctx,
@@ -475,7 +476,7 @@ export class SaveSelectWindow implements GameWindow {
 
     ctx.font = menuFont(small, true)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(text.stages, rect.x + pad, y)
+    fillGlowText(ctx, text.stages, rect.x + pad, y)
     y += lineHeight * 1.5
 
     const flags = slot.data.robot.flags
@@ -484,7 +485,7 @@ export class SaveSelectWindow implements GameWindow {
       const done = Boolean(flags[stage.key])
       ctx.font = menuFont(small)
       ctx.fillStyle = done ? MENU_COLORS.green : MENU_COLORS.dim
-      ctx.fillText(`${done ? '[x]' : '[ ]'} ${stage[this.language]}`, rect.x + pad, y + index * lineHeight * 1.15)
+      fillGlowText(ctx, `${done ? '[x]' : '[ ]'} ${stage[this.language]}`, rect.x + pad, y + index * lineHeight * 1.15)
     })
   }
 
@@ -512,10 +513,10 @@ export class SaveSelectWindow implements GameWindow {
     ctx.textBaseline = 'top'
     ctx.font = menuFont(small + 2, true)
     ctx.fillStyle = MENU_COLORS.bright
-    ctx.fillText(text.deleteQuestion, width / 2, rect.y + 16)
+    fillGlowText(ctx, text.deleteQuestion, width / 2, rect.y + 16)
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(text.deleteHint, width / 2, rect.y + 16 + lineHeight * 1.8)
+    fillGlowText(ctx, text.deleteHint, width / 2, rect.y + 16 + lineHeight * 1.8)
     ctx.textAlign = 'left'
     ctx.restore()
   }

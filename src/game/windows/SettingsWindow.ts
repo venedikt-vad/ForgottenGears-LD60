@@ -9,6 +9,7 @@ import {
   drawPanel,
   drawProgressBar,
   drawRule,
+  fillGlowText,
   fitText,
   includesPoint,
   menuFont,
@@ -249,12 +250,12 @@ export class SettingsWindow implements GameWindow {
     ctx.fillStyle = MENU_COLORS.bright
     ctx.shadowColor = 'rgba(114, 255, 98, 0.3)'
     ctx.shadowBlur = 8
-    ctx.fillText(text.title, margin, margin)
+    fillGlowText(ctx, text.title, margin, margin)
     ctx.shadowBlur = 0
 
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(fitText(ctx, text.subtitle, width - margin * 2), margin, margin + titleSize + 8)
+    fillGlowText(ctx, fitText(ctx, text.subtitle, width - margin * 2), margin, margin + titleSize + 8)
 
     const ruleY = margin + titleSize + lineHeight * 2.1
     drawRule(ctx, margin, ruleY, panelWidth)
@@ -305,7 +306,7 @@ export class SettingsWindow implements GameWindow {
       ctx.fillStyle = selected ? MENU_COLORS.bright : MENU_COLORS.text
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
-      ctx.fillText(`${selected ? '>' : ' '} ${text.rows[index]}`, rect.x + 13, rect.y + rect.height / 2 + 1)
+      fillGlowText(ctx, `${selected ? '>' : ' '} ${text.rows[index]}`, rect.x + 13, rect.y + rect.height / 2 + 1)
 
       if (index === ROW.language) {
         this.drawLanguageOptions(ctx, rect, small)
@@ -315,7 +316,7 @@ export class SettingsWindow implements GameWindow {
         ctx.font = menuFont(small)
         ctx.textAlign = 'right'
         ctx.fillStyle = MENU_COLORS.dim
-        ctx.fillText(selected ? 'ENTER' : '', rect.x + rect.width - 12, rect.y + rect.height / 2 + 1)
+        fillGlowText(ctx, selected ? 'ENTER' : '', rect.x + rect.width - 12, rect.y + rect.height / 2 + 1)
       }
     }
 
@@ -323,14 +324,14 @@ export class SettingsWindow implements GameWindow {
     ctx.textBaseline = 'top'
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(
+    fillGlowText(ctx,
       fitText(ctx, text.audioHint, panelRect.width - pad * 2),
       panelRect.x + pad,
       panelRect.y + panelRect.height - lineHeight - 10,
     )
 
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(fitText(ctx, text.hints, width - margin * 2), margin, height - margin - lineHeight)
+    fillGlowText(ctx, fitText(ctx, text.hints, width - margin * 2), margin, height - margin - lineHeight)
 
     ctx.restore()
   }
@@ -362,7 +363,7 @@ export class SettingsWindow implements GameWindow {
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillStyle = active ? MENU_COLORS.bright : MENU_COLORS.dim
-      ctx.fillText(option.label[this.language], rect.x + rect.width / 2, rect.y + rect.height / 2 + 1)
+      fillGlowText(ctx, option.label[this.language], rect.x + rect.width / 2, rect.y + rect.height / 2 + 1)
     }
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
@@ -384,7 +385,7 @@ export class SettingsWindow implements GameWindow {
     ctx.fillStyle = MENU_COLORS.text
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
-    ctx.fillText(TEXT[this.language].percent(value), row.x + row.width - 12, row.y + row.height / 2 + 1)
+    fillGlowText(ctx, TEXT[this.language].percent(value), row.x + row.width - 12, row.y + row.height / 2 + 1)
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
   }

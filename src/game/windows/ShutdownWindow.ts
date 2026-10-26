@@ -8,6 +8,7 @@ import {
   drawPanel,
   drawProgressBar,
   drawRule,
+  fillGlowText,
   fitText,
   menuFont,
   type MenuRect,
@@ -109,11 +110,11 @@ export class ShutdownWindow implements GameWindow {
     ctx.textBaseline = 'top'
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(text.kicker, margin, margin)
+    fillGlowText(ctx, text.kicker, margin, margin)
 
     ctx.textAlign = 'right'
     ctx.fillStyle = MENU_COLORS.yellow
-    ctx.fillText(text.status, width - margin, margin)
+    fillGlowText(ctx, text.status, width - margin, margin)
     ctx.textAlign = 'left'
 
     const titleY = margin + lineHeight * 2.2
@@ -131,7 +132,7 @@ export class ShutdownWindow implements GameWindow {
 
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(fitText(ctx, text.subtitle, width - margin * 2), margin + 2, titleY + titleSize + 8)
+    fillGlowText(ctx, fitText(ctx, text.subtitle, width - margin * 2), margin + 2, titleY + titleSize + 8)
 
     const ruleY = titleY + titleSize + lineHeight * 2
     drawRule(ctx, margin, ruleY, panelWidth)
@@ -146,13 +147,13 @@ export class ShutdownWindow implements GameWindow {
     const pad = 16
     ctx.font = menuFont(small + 1, true)
     ctx.fillStyle = MENU_COLORS.green
-    ctx.fillText(ru ? 'СОСТОЯНИЕ СИСТЕМЫ' : 'SYSTEM STATE', panelRect.x + pad, panelRect.y + 14)
+    fillGlowText(ctx, ru ? 'СОСТОЯНИЕ СИСТЕМЫ' : 'SYSTEM STATE', panelRect.x + pad, panelRect.y + 14)
     drawRule(ctx, panelRect.x + pad, panelRect.y + 33, panelRect.width - pad * 2, 1, 'rgba(83, 158, 98, 0.25)')
 
     text.lines.forEach((line, index) => {
       ctx.font = menuFont(small + 1)
       ctx.fillStyle = MENU_COLORS.text
-      ctx.fillText(
+      fillGlowText(ctx,
         fitText(ctx, line, panelRect.width - pad * 2 - 18),
         panelRect.x + pad + 14,
         panelRect.y + 48 + index * lineHeight * 1.5,
@@ -174,21 +175,21 @@ export class ShutdownWindow implements GameWindow {
     ctx.font = menuFont(small + 2, true)
     ctx.fillStyle = MENU_COLORS.bright
     if (blinkOn) {
-      ctx.fillText('>', margin, promptY)
+      fillGlowText(ctx, '>', margin, promptY)
     }
     ctx.fillStyle = MENU_COLORS.text
-    ctx.fillText(fitText(ctx, text.prompt, width - margin * 2 - small * 2), margin + small * 2, promptY)
+    fillGlowText(ctx, fitText(ctx, text.prompt, width - margin * 2 - small * 2), margin + small * 2, promptY)
 
     ctx.font = menuFont(small)
     ctx.fillStyle = MENU_COLORS.dim
-    ctx.fillText(
+    fillGlowText(ctx,
       fitText(ctx, text.note, width - margin * 2),
       margin,
       Math.min(height - margin - lineHeight, promptY + lineHeight * 2),
     )
 
     ctx.textAlign = 'right'
-    ctx.fillText(`FG-OS 1.08  ·  ${this.language.toUpperCase()}`, width - margin, height - margin - lineHeight)
+    fillGlowText(ctx, `FG-OS 1.08  ·  ${this.language.toUpperCase()}`, width - margin, height - margin - lineHeight)
     ctx.textAlign = 'left'
 
     ctx.restore()
