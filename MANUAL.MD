@@ -27,7 +27,9 @@ and press **Enter**. The robot-maintenance window opens.
 
 You can also press **1–6** to filter by body part, **0** to show all, **P** to
 jump straight to power distribution, and **T** to open the task manager — a live
-view of the robot's performance, running services, and storage usage.
+view of the robot's performance, running services, and storage usage. In the task
+manager press **E** (or Enter, or double-click a row) to open the RASM source of
+the selected process.
 
 The **TODO** checklist in the UI tracks the five recovery tasks. All five must be
 green before the robot will start.
@@ -143,6 +145,11 @@ from the console with `cat /usr/share/docs/rasm.txt`, or open it in the editor
 with `vim /usr/share/docs/rasm.txt`. The editor's `:help` panel lists the
 commands and points at the same file; `:help rasm` opens it directly.
 
+Every service process in the task manager is backed by a script under
+`/sys/services` (for example `/sys/services/fg.kernel.rasm`). Open the task
+manager, select a process and press **E** to read or edit its script; saving with
+`:w` stores the change in the current session.
+
 ---
 
 ## Step 6 — Actuator Control Bus / Maze (ACT-610)
@@ -213,13 +220,14 @@ The console also doubles as a small shell over the robot's in-memory storage
 | `ls [path]` | List a directory |
 | `cat <file>` | Print a file |
 | `cat /usr/share/docs/rasm.txt` | RASM 1.0 language reference |
+| `ls /sys/services` | One RASM source per service process |
 | `touch <path>` | Create an empty file |
 | `rm <path>` | Delete a file you created (shipped files are protected) |
 | `mv <from> <to>` | Rename or move a file |
 | `find <name>` | Search files by name |
 | `df` | Storage usage against the quotas |
 
-The storage is limited (48 files, 16 KB per file, 128 KB total); the console
+The storage is limited (72 files, 16 KB per file, 192 KB total); the console
 header shows a live meter, and both the console and the editor warn you before
 a write would exceed a quota.
 

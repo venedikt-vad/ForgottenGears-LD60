@@ -203,6 +203,18 @@ The editor's `:help` panel lists its commands and points at that file;
 `:help rasm` opens it directly. The console `help` and `manual` commands also
 print the path.
 
+Every service process of the robot (the rows of the task manager) has a real
+RASM source under `/sys/services`, named after the process. Open the task
+manager, select a service and press `E` (or Enter) to read and edit its script
+in the editor; `:w` saves it into the session filesystem. The same files are
+reachable from the shell:
+
+```text
+ls /sys/services
+cat /sys/services/fg.thermal.prot.rasm
+vim /sys/services/fg.thermal.prot.rasm
+```
+
 From the console you can also check a file without opening the window:
 
 ```

@@ -16,8 +16,9 @@ TypeScript/Canvas implementation for the Forgotten Gears game. The console and o
 - `windows/ConsoleWindow.ts` — old-school BIOS/POST layout with a framed boot banner, aligned hardware and memory tables, module progress bars, an error log, animated diagnostic records (including failures and warnings), persistent transcript, scrollback, a text-based Y/N prompt, terminal commands, path autocompletion, and a storage meter in the header.
 - `windows/CodeEditorWindow.ts` — CRT/amber Vim-style editor: file panel, command mode (`:w`, `:e`, `:new`, …), and quota-aware saves into the virtual filesystem.
 - `windows/UiWindow.ts` — robot-maintenance utility panel (component registry, body schematic, power redistribution). Press `T` for the task manager.
-- `windows/TaskManagerWindow.ts` — green-BIOS task manager: performance gauges (CPU load, frame time, memory, temperature, power draw, storage), a scrollable process table tied to real components, load sparklines, and the storage panel.
+- `windows/TaskManagerWindow.ts` — green-BIOS task manager: performance gauges (CPU load, frame time, memory, temperature, power draw, storage), a scrollable process table tied to real components, load sparklines, and the storage panel. Every process row is bound to a RASM source: `E` or Enter opens it in the editor.
 - `RobotData.ts` — single read-model in front of `RobotSystem` + `VirtualFileSystem`. Interface windows ask it for components, performance samples, parameters, processes, and storage instead of reaching into raw state.
+- `runtime/servicePrograms/` — one module per service process (PID 1–19, 90–92) holding its RASM 1.0 source, seeded under `/sys/services` and exposed in the process table through `scriptPath`. `index.ts` is the barrel; `types.ts` holds the shared shape.
 - `VirtualFileSystem/` — in-memory file store shared by the console and the editor, with hard quotas (see below).
 - `rasm/` — the RASM 1.0 language core (parser, compiler, device bus, virtual processor, debugger). UI-independent; see `rasm/RASM.md` for the language reference. The in-game debugger lives in `windows/RasmWindow.ts`.
 
@@ -77,16 +78,17 @@ The header shows a live storage meter whenever the window is wide enough.
 
 Everything lives in JS memory, so the store is capped to keep a long session from growing without stalling the frame (`VFS_LIMITS` in `VirtualFileSystem/`):
 
-- up to 48 files,
+- from the console, `ls /sys/services` lists one `.rasm` file per service process; `cat` reads it and `vim` edits it,
+- up to 72 files,
 - up to 16 KB per file,
-- up to 128 KB in total.
+- up to 192 KB in total.
 
 Both language variants of a file count toward the same quota. Quota violations are reported in the console and in the editor, and the storage meter/UI display the current fill level.
 
 ## Keyboard reference
 
 - In the maintenance utility: Up/Down or 1–6 (or W/S) to select a component, Enter to inspect, `P` for power redistribution, `T` for the task manager, Escape or C to return to the console.
-- In the task manager: Up/Down to scroll the process table, Escape or C to return to the console.
+- In the task manager: Up/Down to scroll the process table, `E` or Enter to open the selected process's RASM source in the editor, `K`/`P`/`R` to kill/pause/restart a program, Escape or C to return to the console. A double-click also opens the source.
 - The console instance remains alive while hidden, preserving its transcript and scroll position.
 
 ## Integration
