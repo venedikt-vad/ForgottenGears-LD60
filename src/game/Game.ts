@@ -627,7 +627,19 @@ export class Game {
     this.codeEditor = codeEditor
 
     const uiWindow = new UiWindow(this.robotSystem, robotData)
-    const taskManagerWindow = new TaskManagerWindow(robotData)
+    const taskManagerWindow = new TaskManagerWindow(robotData, {
+      // The task manager can open the RASM file behind a service row. The
+      // editor owns the buffer and returns to the task manager on :q.
+      openSource: (path) => {
+        if (!codeEditor.openFile(path, false, 'tasks')) {
+          return this.language === 'ru'
+            ? `НЕ УДАЛОСЬ ОТКРЫТЬ ИСХОДНИК: ${path} (НЕСОХРАНЁННЫЕ ИЗМЕНЕНИЯ?)`
+            : `CANNOT OPEN SOURCE: ${path} (UNSAVED CHANGES?)`
+        }
+        this.windows.show('editor')
+        return null
+      },
+    })
     const victoryWindow = new VictoryWindow()
     this.uiWindow = uiWindow
     this.taskManagerWindow = taskManagerWindow

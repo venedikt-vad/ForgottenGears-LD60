@@ -1001,6 +1001,7 @@ export class ConsoleWindow implements GameWindow {
               '  kill <PID>       — завершить процесс',
               '  pause <PID>      — приостановить процесс',
               '  resume <PID>     — продолжить процесс',
+              '  Исходники служб: /sys/services/*.rasm (в tasks: E — открыть скрипт).',
               '',
               'ФАЙЛЫ:',
               '  ls [путь]      — содержимое каталога',
@@ -1042,6 +1043,7 @@ export class ConsoleWindow implements GameWindow {
               '  kill <PID>       — terminate a process',
               '  pause <PID>      — suspend a process',
               '  resume <PID>     — continue a process',
+              '  Service sources: /sys/services/*.rasm (in tasks: E opens a script).',
               '',
               'FILES:',
               '  ls [path]    — list a directory',
@@ -1095,7 +1097,7 @@ export class ConsoleWindow implements GameWindow {
           return
         }
         const editorPath = rawArgument ? this.fileSystem.resolvePath(this.cwd, rawArgument) : path
-        if (this.codeEditor.openFile(editorPath, false)) {
+        if (this.codeEditor.openFile(editorPath, false, 'console')) {
           this.appendLines(this.language === 'ru'
             ? [`ОТКРЫТИЕ РЕДАКТОРА: ${editorPath}`, 'NORMAL: i — ввод; Esc — команды Vim; выход — :q или :wq.', '']
             : [`OPENING EDITOR: ${editorPath}`, 'NORMAL: i — insert; Esc — Vim commands; exit with :q or :wq.', ''])
@@ -1711,6 +1713,9 @@ export class ConsoleWindow implements GameWindow {
       ru
         ? `${programs.length} ПРОГРАММ, ${data.getProcesses().filter((process) => process.kind === 'program' && (process.state === 'RUNNING' || process.state === 'DEGRADED')).length} АКТИВНЫХ. * — ПРОГРАММА ОПЕРАТОРА.`
         : `${programs.length} PROGRAMS, ${data.getProcesses().filter((process) => process.kind === 'program' && (process.state === 'RUNNING' || process.state === 'DEGRADED')).length} ACTIVE. * — OPERATOR PROGRAM.`,
+      ru
+        ? 'ИСХОДНИКИ СЛУЖБ: /sys/services/*.rasm · в tasks клавиша E открывает скрипт процесса.'
+        : 'SERVICE SOURCES: /sys/services/*.rasm · in tasks press E to open a process script.',
       '',
     )
     this.appendLines(lines)

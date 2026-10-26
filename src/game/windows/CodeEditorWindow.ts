@@ -197,7 +197,9 @@ export class CodeEditorWindow implements GameWindow {
   private manager: WindowManager | null = null
   private language: GameLanguage = 'ru'
   private readonly fileSystem: VirtualFileSystem
-  private readonly returnWindowId: string
+  private readonly defaultReturnWindowId: string
+  /** Window to return to after `:q`; set by whoever opens the file. */
+  private activeReturnWindowId: string
   private readonly onValidate?: (path: string, valid: boolean) => void
   private readonly onRun?: (path: string, source: string) => string
   private files: string[] = []
@@ -243,7 +245,8 @@ export class CodeEditorWindow implements GameWindow {
   }
   constructor(options: CodeEditorOptions = {}) {
     this.fileSystem = options.fileSystem ?? new VirtualFileSystem()
-    this.returnWindowId = options.returnWindowId ?? 'ui'
+    this.defaultReturnWindowId = options.returnWindowId ?? 'ui'
+    this.activeReturnWindowId = this.defaultReturnWindowId
     this.onValidate = options.onValidate
     this.onRun = options.onRun
     this.refreshFileList()
@@ -298,8 +301,12 @@ export class CodeEditorWindow implements GameWindow {
       this.loadFile(this.files[this.selectedFileIndex]!)
     }
   }
-  /** Open a virtual file. Returns false if it does not exist or edits would be lost. */
-  openFile(path: string, force = false): boolean {
+  /**
+   * Open a virtual file. Returns false if it does not exist or edits would be lost.
+   * `returnWindowId` records where `:q` goes back to; omit it to keep the
+   * origin of the current visit (the editor itself uses that for `:e`).
+   */
+  openFile(path: string, force = false, returnWindowId?: string): boolean {
     if (this.isDirty() && !force) {
       this.setMessage(
         this.language === 'ru'
@@ -327,6 +334,7 @@ export class CodeEditorWindow implements GameWindow {
       return false
     }
     this.loadFile(resolved)
+    if (returnWindowId) this.activeReturnWindowId = returnWindowId
     return true
   }
   update(_dt: number, input: Input): void {
@@ -1576,7 +1584,7 @@ export class CodeEditorWindow implements GameWindow {
   private exitEditor(): void {
     this.mode = 'NORMAL'
     this.detachPointerInput()
-    this.manager?.show(this.returnWindowId)
+    this.manager?.show(this.activeReturnWindowId)
   }
   private setCursor(row: number, col: number): void {
     this.cursorRow = Math.max(0, Math.min(this.buffer.length - 1, row))

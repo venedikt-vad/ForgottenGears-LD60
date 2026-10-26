@@ -6,6 +6,14 @@ import type { WindowManager } from './WindowManager'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
+export interface TaskManagerWindowOptions {
+  /**
+   * Open the RASM source of a process. The task manager only asks the host to
+   * show the file; when the host refuses, it returns a message to display.
+   */
+  openSource?: (path: string, pid: number) => string | null
+}
+
 const COLORS = {
   // Kept transparent on purpose: the blurred glow layer lives *under* the game
   // canvas and only shows through unpainted pixels, so a full-screen tint here
@@ -84,6 +92,7 @@ export class TaskManagerWindow implements GameWindow {
 
   private manager: WindowManager | null = null
   private readonly robotData: RobotData
+  private readonly openSource: ((path: string, pid: number) => string | null) | null
   private language: GameLanguage = 'ru'
 
   private selectedIndex = 0
@@ -93,12 +102,16 @@ export class TaskManagerWindow implements GameWindow {
   private blinkClock = 0
   private wasPointerDown = false
   private processRows: Rect[] = []
+  /** Time left in which a second click on the same row opens its source. */
+  private doubleClickClock = 0
+  private lastClickIndex = -1
   /** Transient message shown after a control verb, empty when there is none. */
   private notice = ''
   private noticeClock = 0
 
-  constructor(robotData: RobotData) {
+  constructor(robotData: RobotData, options: TaskManagerWindowOptions = {}) {
     this.robotData = robotData
+    this.openSource = options.openSource ?? null
   }
 
   setLanguage(language: GameLanguage): void {
@@ -116,6 +129,7 @@ export class TaskManagerWindow implements GameWindow {
   update(dt: number, input: Input): void {
     this.appearTime += dt
     this.blinkClock += dt
+    this.doubleClickClock = Math.max(0, this.doubleClickClock - dt)
 
     if (this.notice) {
       this.noticeClock += dt
@@ -157,15 +171,29 @@ export class TaskManagerWindow implements GameWindow {
     if (input.wasPressed('KeyK')) this.controlSelected('kill')
     if (input.wasPressed('KeyP')) this.controlSelected('pause')
     if (input.wasPressed('KeyR')) this.controlSelected('restart')
+    // E / Enter opens the RASM source bound to the selected row.
+    if (input.wasPressed('KeyE') || input.wasPressed('Enter')) this.openSelectedSource()
 
     const down = input.isPointerDown()
     if (down && !this.wasPointerDown) {
       const x = input.pointerPosition.x
       const y = input.pointerPosition.y
+      let clicked = -1
       for (const [index, rect] of this.processRows.entries()) {
         if (x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height) {
-          this.selectedIndex = Math.min(processes.length - 1, this.scrollTop + index)
+          clicked = Math.min(processes.length - 1, this.scrollTop + index)
           break
+        }
+      }
+      if (clicked >= 0) {
+        this.selectedIndex = clicked
+        if (clicked === this.lastClickIndex && this.doubleClickClock > 0) {
+          this.openSelectedSource()
+          this.doubleClickClock = 0
+          this.lastClickIndex = -1
+        } else {
+          this.lastClickIndex = clicked
+          this.doubleClickClock = 0.4
         }
       }
     }
@@ -282,8 +310,8 @@ export class TaskManagerWindow implements GameWindow {
     ctx.fillStyle = COLORS.dim
     ctx.textAlign = 'left'
     const hint = this.language === 'ru'
-      ? '↑/↓: ВЫБОР · PAGEUP/PAGEDOWN: ПРОКРУТКА · K: ЗАВЕРШИТЬ · P: ПАУЗА · R: ПЕРЕЗАПУСК · ESC / C: КОНСОЛЬ'
-      : '↑/↓: SELECT · PAGEUP/PAGEDOWN: SCROLL · K: KILL · P: PAUSE · R: RESTART · ESC / C: CONSOLE'
+      ? '↑/↓: ВЫБОР · PAGEUP/PAGEDOWN: ПРОКРУТКА · E: ИСХОДНИК · K: ЗАВЕРШИТЬ · P: ПАУЗА · R: ПЕРЕЗАПУСК · ESC / C: КОНСОЛЬ'
+      : '↑/↓: SELECT · PAGEUP/PAGEDOWN: SCROLL · E: SOURCE · K: KILL · P: PAUSE · R: RESTART · ESC / C: CONSOLE'
     ctx.fillText(this.fitText(ctx, hint, width - margin * 2), margin, footerY)
 
     if (this.notice) {
@@ -294,6 +322,45 @@ export class TaskManagerWindow implements GameWindow {
     }
 
     ctx.restore()
+  }
+
+  /**
+   * Open the RASM source bound to the selected row.
+   *
+   * Every service process ships a script under /sys/services; an operator
+   * program points at the file it was launched from. The task manager does not
+   * edit the file itself — it hands the path to the code editor, which owns the
+   * buffer and the quota-aware save.
+   */
+  private openSelectedSource(): void {
+    const selected = this.robotData.getProcesses()[this.selectedIndex]
+    if (!selected) return
+
+    if (!selected.scriptPath) {
+      this.notice = this.language === 'ru'
+        ? `ПРОЦЕСС ${selected.pid}: ФАЙЛ ИСХОДНИКА НЕ НАЙДЕН.`
+        : `PROCESS ${selected.pid}: NO SOURCE FILE.`
+      this.noticeClock = 0
+      return
+    }
+
+    if (!this.openSource) {
+      this.notice = this.language === 'ru' ? 'РЕДАКТОР НЕ ПОДКЛЮЧЁН.' : 'EDITOR IS NOT CONNECTED.'
+      this.noticeClock = 0
+      return
+    }
+
+    const error = this.openSource(selected.scriptPath, selected.pid)
+    if (error) {
+      this.notice = error
+      this.noticeClock = 0
+      return
+    }
+
+    this.notice = this.language === 'ru'
+      ? `ИСХОДНИК ОТКРЫТ: ${selected.scriptPath}`
+      : `SOURCE OPENED: ${selected.scriptPath}`
+    this.noticeClock = 0
   }
 
   // ------------------------------------------------------------------ pieces
@@ -417,7 +484,7 @@ export class TaskManagerWindow implements GameWindow {
     ctx.fillText(this.language === 'ru' ? 'СОСТОЯНИЕ' : 'STATE', rect.x + rect.width - pad, headerY)
     ctx.textAlign = 'left'
 
-    const detailHeight = lineHeight * 2 + 8
+    const detailHeight = lineHeight * 3 + 10
     const listTop = rect.y + Math.ceil(lineHeight * 2.4) + 14
     const listBottom = rect.y + rect.height - detailHeight - pad
     const rowHeight = Math.max(lineHeight + 2, lineHeight + 4)
@@ -507,6 +574,20 @@ export class TaskManagerWindow implements GameWindow {
             : `${selected.componentId}: —`
           : (this.language === 'ru' ? 'СЛУЖБА СИСТЕМЫ (БЕЗ КОМПОНЕНТА)' : 'SYSTEM SERVICE (NO COMPONENT)')
       ctx.fillText(this.fitText(ctx, statusLine, rect.width - pad * 2), rect.x + pad, detailY + 5 + lineHeight)
+
+      // Third line: the RASM source bound to the process. E / Enter opens it.
+      ctx.fillStyle = selected.scriptPath ? COLORS.cyan : COLORS.dim
+      const scriptLine = selected.scriptPath
+        ? `${this.language === 'ru' ? 'СКРИПТ' : 'SCRIPT'}: ${selected.scriptPath}`
+        : (this.language === 'ru' ? 'СКРИПТ: —' : 'SCRIPT: —')
+      const openHint = selected.scriptPath
+        ? (this.language === 'ru' ? '  [E — ОТКРЫТЬ]' : '  [E — OPEN]')
+        : ''
+      ctx.fillText(
+        this.fitText(ctx, `${scriptLine}${openHint}`, rect.width - pad * 2),
+        rect.x + pad,
+        detailY + 5 + lineHeight * 2,
+      )
     }
   }
 
