@@ -308,8 +308,8 @@ export class RasmWindow implements GameWindow {
         playSfx('incorrect')
         const budgetError = result.snapshot.error
         this.setMessage(this.language === 'ru'
-          ? `ОШИБКА — СТРОКА ${budgetError?.line ?? '?'}: ${budgetError?.message ?? `ЛИМИТ ${result.executed} ИНСТРУКЦИЙ ИСЧЕРПАН`}`
-          : `ERROR — LINE ${budgetError?.line ?? '?'}: ${budgetError?.message ?? `STEP BUDGET ${result.executed} EXHAUSTED`}`, true)
+          ? `ПРЕДЕЛ ОТЛАДЧИКА — СТРОКА ${budgetError?.line ?? '?'}: ${budgetError?.message ?? `ЛИМИТ ${result.executed} ИНСТРУКЦИЙ ИСЧЕРПАН`} ДЛЯ БЕСКОНЕЧНОГО ЦИКЛА: run <ФАЙЛ> В КОНСОЛИ.`
+          : `DEBUGGER LIMIT — LINE ${budgetError?.line ?? '?'}: ${budgetError?.message ?? `STEP BUDGET ${result.executed} EXHAUSTED`} RUN AN INFINITE LOOP WITH run <FILE> IN THE CONSOLE.`, true)
         break
       }
       case 'error': {
