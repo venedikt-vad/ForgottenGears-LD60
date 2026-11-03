@@ -2,12 +2,34 @@
 
 A 2D game built with TypeScript, HTML5 Canvas, and [Vite](https://vite.dev/).
 
-## Requirements
+You are an operator bringing a damaged robot back to life.
+
+## Links
+
+[![Play on itch.io](https://img.shields.io/badge/itch.io-Play%20Forgotten%20Gears-fa5c5c?style=for-the-badge&logo=itch.io&logoColor=white)](https://venediktvad.itch.io/forgottengears)
+[![Ludum Dare 60](https://img.shields.io/badge/Ludum%20Dare-60%20Entry-2b2b2b?style=for-the-badge)](https://ldjam.com/events/ludum-dare/60/forgotten-gears)
+
+<details>
+<summary><b>Screenshots</b></summary>
+
+| | | |
+| :---: | :---: | :---: |
+| [![Screenshot 1](screenshots/vlcsnap-2026-10-20-01h20m00s932.png)](screenshots/vlcsnap-2026-10-20-01h20m00s932.png) | [![Screenshot 2](screenshots/vlcsnap-2026-10-20-01h20m12s447.png)](screenshots/vlcsnap-2026-10-20-01h20m12s447.png) | [![Screenshot 3](screenshots/vlcsnap-2026-10-20-01h20m18s955.png)](screenshots/vlcsnap-2026-10-20-01h20m18s955.png) |
+| [![Screenshot 4](screenshots/vlcsnap-2026-10-20-01h20m26s135.png)](screenshots/vlcsnap-2026-10-20-01h20m26s135.png) | [![Screenshot 5](screenshots/vlcsnap-2026-10-20-01h20m38s994.png)](screenshots/vlcsnap-2026-10-20-01h20m38s994.png) | [![Screenshot 6](screenshots/vlcsnap-2026-10-20-01h20m50s443.png)](screenshots/vlcsnap-2026-10-20-01h20m50s443.png) |
+| [![Screenshot 7](screenshots/vlcsnap-2026-10-20-01h21m01s251.png)](screenshots/vlcsnap-2026-10-20-01h21m01s251.png) | | |
+
+</details>
+
+<details>
+<summary><b>Requirements</b></summary>
 
 - [Node.js](https://nodejs.org/) 20.19+ or 22.12+ (Vite 8 requirement)
 - npm (bundled with Node.js)
 
-## Getting started
+</details>
+
+<details>
+<summary><b>Getting started</b></summary>
 
 Install dependencies:
 
@@ -23,17 +45,10 @@ npm run dev
 
 Open the printed URL (default <http://localhost:5173>).
 
-Controls: **WASD** or **arrow keys** to move.
+</details>
 
-## Scripts
-
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Start the dev server with HMR |
-| `npm run build` | Type-check and build for production into `dist/` |
-| `npm run preview` | Serve the production build locally to test it |
-
-## Project structure
+<details>
+<summary><b>Project structure</b></summary>
 
 ```
 index.html          # HTML shell with the <canvas>
@@ -46,61 +61,4 @@ src/
     Input.ts        # Keyboard input state
 ```
 
-## Deploying
-
-### itch.io
-
-itch.io hosts HTML games from a ZIP of your built files.
-
-1. Build the game:
-
-   ```bash
-   npm run build
-   ```
-
-   This creates the `dist/` folder. The Vite config sets `base: './'`, so all asset paths are relative and work from any subdirectory.
-
-2. Create a ZIP containing the **contents** of `dist/` (not the `dist` folder itself). `index.html` must be at the root of the ZIP.
-
-   PowerShell:
-
-   ```powershell
-   Compress-Archive -Path .\dist\* -DestinationPath .\forgotten-gears.zip -Force
-   ```
-
-   macOS/Linux:
-
-   ```bash
-   (cd dist && zip -r ../forgotten-gears.zip .)
-   ```
-
-3. On itch.io, create a new project, set **Kind of project** to **HTML**, and upload the ZIP.
-
-4. Tick **"This file will be played in the browser"** and choose an embed size (e.g. `1280 x 720`). Optionally enable fullscreen.
-
-5. Save and publish.
-
-> Tip: keep the ZIP's `index.html` at the top level. Uploading the `dist` folder itself will result in a blank page.
-
-### GitHub Pages
-
-1. In `vite.config.ts`, keep `base: './'` for a root/user page. For a project page it also works, but if you prefer an absolute path use `base: '/<repo-name>/'`.
-2. Build with `npm run build`.
-3. Publish the `dist/` folder, e.g. using the [`gh-pages`](https://www.npmjs.com/package/gh-pages) package:
-
-   ```bash
-   npx gh-pages -d dist
-   ```
-
-4. In the repo settings, set Pages to serve from the `gh-pages` branch.
-
-### Netlify / Vercel / Cloudflare Pages
-
-These platforms build automatically:
-
-- **Build command:** `npm run build`
-- **Output/publish directory:** `dist`
-
-### Any static host
-
-Run `npm run build` and upload the contents of `dist/` to any static file host.
+</details>
